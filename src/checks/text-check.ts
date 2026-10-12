@@ -1,161 +1,273 @@
+
+import { URLSearchParams } from "node:url";
+
 // Automatisk kontroll av stavning och grammatik
-// med hjälp av LanguageTool
+// med hjälp av LanguageTool.
 
 export interface TextIssue {
-  // Beskrivningen av felet
   message: string;
-
-  // Förslag på rättning
   suggestions: string[];
-
-  // Texten där felet hittades
   context: string;
-
-  // Själva ordet eller textdelen
-  // som LanguageTool markerade
   matchedText: string;
-
-  // URL till sidan där felet hittades
   pageUrl: string;
 }
 
 export interface TextCheckResult {
-  // Antal hittade fel
   errors: number;
-
-  // Lista över alla hittade fel
   issues: TextIssue[];
-
-  // Resultat för QA-systemet
   status: "PASS" | "WARNING";
 }
 
-
-// =========================================================
-// GOOGLE RECENSIONER
-// =========================================================
-
-// Tar bort Google-recensioner från texten
-// eftersom recensionerna är användargenererat innehåll.
-function removeGoogleReviews(
-  text: string
-): string {
-
-  // Kopierar texten så att originalet inte ändras
-  let cleanedText = text;
-
-  // Vanliga rubriker som används av
-  // Google-recensionssektioner
-  const reviewMarkers = [
-    "Google Reviews",
-    "Google recensioner",
-    "Google-recensioner",
-    "Recensioner från Google",
-    "Google reviews",
-  ];
-
-  // Försöker hitta en Google-recensionssektion
-  for (const marker of reviewMarkers) {
-
-    // Hittar var sektionen börjar
-    const markerIndex =
-      cleanedText
-        .toLowerCase()
-        .indexOf(marker.toLowerCase());
-
-    // Om sektionen hittades
-    if (markerIndex !== -1) {
-
-      // Behåller bara texten före
-      // Google-recensionerna
-      cleanedText =
-        cleanedText.substring(
-          0,
-          markerIndex
-        );
-    }
-  }
-
-  // Returnerar texten utan Google-recensioner
-  return cleanedText;
+interface LanguageToolMatch {
+  message?: string;
+  replacements?: Array<{ value?: string }>;
+  context?: {
+    text?: string;
+    offset?: number;
+    length?: number;
+  };
+  rule?: {
+    id?: string;
+    issueType?: string;
+  };
 }
 
-
 // =========================================================
-// TEKNISKA ORD
+// TEKNISKA IDENTIFIERARE
 // =========================================================
 
-// Kontrollerar om en träff ser ut som ett
-// tekniskt ord eller tekniskt identifierarnamn.
-//
-// Vi hårdkodar inte specifika ord.
-// Funktionen tittar istället på hur ordet
-// är uppbyggt.
-function isTechnicalTerm(
-  matchedText: string
-): boolean {
+function isTechnicalTerm(value: string): boolean {
+  const word = value.trim();
 
-  const word =
-    matchedText.trim();
-
-  // Tom text ska inte räknas som tekniskt ord.
   if (!word) {
-    return false;
-  }
-
-  // Tekniska identifierare använder ofta
-  // bindestreck eller underscore.
-  //
-  // Exempel:
-  // wp-settings-
-  // wp-settings-time-
-  // wp_lang
-  if (
-    /^wp[-_]/i.test(word) ||
-    /[-_]/.test(word)
-  ) {
     return true;
   }
 
-  // Tekniska identifierare kan ibland
-  // innehålla både bokstäver och siffror.
-  if (
-    /[a-zA-Z]/.test(word) &&
-    /\d/.test(word)
-  ) {
+  // WordPress-inställningar, cookie-namn och andra
+  // tekniska identifierare med bindestreck eller understreck.
+  if (/^[\p{L}\p{N}_]+(?:[-_][\p{L}\p{N}_]*)+$/u.test(word)) {
+    return true;
+  }
+
+  // Exempel: version2, api123 och liknande identifierare.
+  if (/[\p{L}]/u.test(word) && /\d/.test(word)) {
     return true;
   }
 
   return false;
 }
 
+// =========================================================
+// KÄNDA ORD OCH FÖRKORTNINGAR
+// =========================================================
+
+const IGNORED_WORDS = new Set([
+  "google",
+  "wordpress",
+  "instagram",
+  "facebook",
+  "linkedin",
+  "youtube",
+  "tiktok",
+  "seo",
+  "ads",
+  "api",
+  "html",
+  "css",
+  "javascript",
+  "typescript",
+  "playwright",
+  "pagespeed",
+  "digitalkontakt",
+]);
+
+// Ord som är kända för en viss webbplats.
+// Vanliga svenska ord ska inte läggas här globalt.
+function getSiteKnownWords(pageUrl: string): Set<string> {
+  const words = new Set<string>();
+
+  try {
+    const hostname = new URL(pageUrl).hostname.toLowerCase();
+
+    if (hostname.includes("tmkbetong")) {
+      [
+        "tmk",
+        "betonghåltagning",
+        "bilning",
+        "husarvägen",
+        "karvonen",
+        "administrationsdelen",
+        "administrationsvyns",
+      ].forEach((word) => words.add(word));
+    }
+  } catch {
+    // En ogiltig URL ska inte stoppa textkontrollen.
+  }
+
+  return words;
+}
+
+// Vissa ord är tekniska endast i vissa sammanhang.
+function isTechnicalContext(
+  matchedText: string,
+  context: string
+): boolean {
+  const word = matchedText.trim().toLowerCase();
+  const normalizedContext = context.toLowerCase();
+
+  const technicalWords = new Set([
+    "hash",
+    "sec",
+    "logged",
+  ]);
+
+  if (!technicalWords.has(word)) {
+    return false;
+  }
+
+  return /wordpress|wp-content|cookie|cookies|session|consent|security|logged.?in|http/i.test(
+    normalizedContext
+  );
+}
+
+// =========================================================
+// IDENTIFIERA UPPREPADE ORD
+// =========================================================
+
+function isRepeatedWord(value: string): boolean {
+  const word = String.raw`([\p{L}][\p{L}'’\-]{2,})`;
+  const pattern = new RegExp(`^${word}\\s+\\1$`, "iu");
+
+  return pattern.test(value.trim());
+}
+
+// Rubriker kan hamna bredvid varandra i den extraherade texten.
+// Två identiska versala ord ska därför inte automatiskt
+// klassas som ett stavfel.
+function isUppercaseRepeatedWord(value: string): boolean {
+  if (!isRepeatedWord(value)) {
+    return false;
+  }
+
+  return /^[\p{Lu}\s'’\-]+$/u.test(value.trim());
+}
+
+// =========================================================
+// HÄMTA EXAKT MARKERAD TEXT
+// =========================================================
+
+function getMatchedText(match: LanguageToolMatch): string {
+  const context = match.context?.text;
+  const offset = match.context?.offset;
+  const length = match.context?.length;
+
+  if (
+    typeof context !== "string" ||
+    !Number.isInteger(offset) ||
+    !Number.isInteger(length) ||
+    offset! < 0 ||
+    length! <= 0 ||
+    offset! + length! > context.length
+  ) {
+    return "";
+  }
+
+  return context.substring(offset!, offset! + length!);
+}
+
+// =========================================================
+// HÄMTA FÖRSLAG
+// =========================================================
+
+function getSuggestions(match: LanguageToolMatch): string[] {
+  return (match.replacements ?? [])
+    .slice(0, 3)
+    .map((replacement) => replacement.value?.trim() ?? "")
+    .filter((suggestion) => suggestion.length > 0);
+}
+
+// =========================================================
+// KONTROLLERA UPPREPADE ORD
+// =========================================================
+
+// Hittar exempelvis:
+// "Vi erbjuder erbjuder hjälp"
+//
+// Versala upprepningar hoppas över eftersom de ofta kan
+// komma från två rubriker som hamnat intill varandra.
+
+function findRepeatedWords(
+  text: string,
+  pageUrl: string
+): TextIssue[] {
+  const issues: TextIssue[] = [];
+
+  const pattern =
+    /\b([\p{L}][\p{L}'’\-]{2,})\s+\1\b/giu;
+
+  for (const match of text.matchAll(pattern)) {
+    const repeatedText = match[0];
+
+    if (!repeatedText || isUppercaseRepeatedWord(repeatedText)) {
+      continue;
+    }
+
+    const start = match.index ?? 0;
+    const contextStart = Math.max(0, start - 65);
+    const contextEnd = Math.min(
+      text.length,
+      start + repeatedText.length + 65
+    );
+
+    const context = text
+      .slice(contextStart, contextEnd)
+      .replace(/\s+/g, " ")
+      .trim();
+
+    issues.push({
+      message: "Samma ord förekommer två gånger i följd.",
+      suggestions: [match[1]],
+      context,
+      matchedText: repeatedText,
+      pageUrl,
+    });
+  }
+
+  return issues;
+}
+
+// =========================================================
+// SKAPA DUBBLETTNYCKEL
+// =========================================================
+
+function normalize(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase("sv");
+}
+
+function issueKey(issue: TextIssue): string {
+  return [
+    normalize(issue.matchedText),
+    normalize(issue.message),
+    normalize(issue.context),
+    issue.pageUrl,
+  ].join("|");
+}
 
 // =========================================================
 // TEXTKONTROLL
 // =========================================================
 
-// Kontrollerar text med LanguageTool.
 export async function checkText(
   text: string,
   language = "sv",
   pageUrl = "",
   siteWordFrequency?: Map<string, number>
 ): Promise<TextCheckResult> {
-
   try {
-
-    // -----------------------------------------------------
-    // TOM TEXT
-    // -----------------------------------------------------
-
-    // Om sidan inte innehåller någon text
-    // behöver vi inte göra någon kontroll.
     if (!text.trim()) {
-
-      console.log(
-        "- Ingen text hittades"
-      );
-
       return {
         errors: 0,
         issues: [],
@@ -163,88 +275,38 @@ export async function checkText(
       };
     }
 
+    // Ta inte bort allt innehåll efter en Google Reviews-markör.
+    // Sådana markörer kan förekomma mitt på en sida och texten
+    // efter dem kan innehålla viktigt innehåll.
+    const cleanedText = text
+      .replace(/\r\n/g, "\n")
+      .replace(/[ \t]+/g, " ")
+      .trim();
 
-    // -----------------------------------------------------
-    // TA BORT GOOGLE-RECENSIONER
-    // -----------------------------------------------------
+    const knownWords = getSiteKnownWords(pageUrl);
 
-    // Tar bort Google-recensioner
-    // från texten som ska analyseras.
-    const textWithoutReviews =
-      removeGoogleReviews(text);
+    // Frekvensdata ska inte automatiskt dölja återkommande
+    // felstavningar på flera sidor.
+    void siteWordFrequency;
 
-    // Om det inte finns någon text kvar
-    // efter att recensionerna tagits bort.
-    if (!textWithoutReviews.trim()) {
+    const body = new URLSearchParams();
+    body.append("text", cleanedText);
+    body.append("language", language);
 
-      console.log(
-        "✓ Ingen relevant webbplatstext att kontrollera"
-      );
-
-      return {
-        errors: 0,
-        issues: [],
-        status: "PASS",
-      };
-    }
-
-
-    // -----------------------------------------------------
-    // RENGÖR TEXT
-    // -----------------------------------------------------
-
-    // Tar bort extra mellanslag
-    // för att göra textkontrollen renare.
-    const cleanedText =
-      textWithoutReviews
-        .replace(/\s+/g, " ")
-        .trim();
-
-
-    // -----------------------------------------------------
-    // LANGUAGE TOOL
-    // -----------------------------------------------------
-
-    // Skapar data som skickas till LanguageTool.
-    const body =
-      new URLSearchParams();
-
-    body.append(
-      "text",
-      cleanedText
+    const response = await fetch(
+      "https://api.languagetool.org/v2/check",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: body.toString(),
+      }
     );
 
-    body.append(
-      "language",
-      language
-    );
-
-    // Skickar texten till LanguageTool.
-    const response =
-      await fetch(
-        "https://api.languagetool.org/v2/check",
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type":
-              "application/x-www-form-urlencoded",
-          },
-
-          body,
-        }
-      );
-
-
-    // -----------------------------------------------------
-    // KONTROLLERA SVAR
-    // -----------------------------------------------------
-
-    // Kontrollerar om API-anropet lyckades.
     if (!response.ok) {
-
       console.log(
-        `⚠ LanguageTool svarade med ${response.status}`
+        `⚠ LanguageTool svarade med HTTP ${response.status}.`
       );
 
       return {
@@ -254,365 +316,118 @@ export async function checkText(
       };
     }
 
-
-    // Läser svaret från LanguageTool.
-    const data =
+    const data: { matches?: LanguageToolMatch[] } =
       await response.json();
 
-
-    // Hämtar alla hittade fel.
-    const matches =
-      data.matches || [];
-
-
-    // -----------------------------------------------------
-    // IGNORERADE ORD
-    // -----------------------------------------------------
-
-    // Vanliga tekniska ord, varumärken
-    // och förkortningar som inte ska flaggas.
-    const ignoredWords = new Set([
-      "google",
-      "wordpress",
-      "instagram",
-      "facebook",
-      "linkedin",
-      "youtube",
-      "tiktok",
-      "seo",
-      "ads",
-      "api",
-      "html",
-      "css",
-      "javascript",
-      "typescript",
-      "playwright",
-      "digitalkontakt",
-      "google ads",
-      "page speed",
-      "pagespeed",
-    ]);
-
-
-    // -----------------------------------------------------
-    // FILTRERA LANGUAGE TOOL
-    // -----------------------------------------------------
-
-    // Filtrerar bort uppenbara falska träffar.
-    const filteredMatches =
-      matches.filter((match: any) => {
-
-        // Hämtar texten där felet hittades.
-        const context =
-          match.context?.text || "";
-
-
-        // Hämtar själva ordet eller textdelen
-        // som LanguageTool markerade.
-        const matchedText =
-          match.context?.text
-            ?.substring(
-              match.context.offset || 0,
-              (match.context.offset || 0) +
-              (match.context.length || 0)
-            ) || "";
-
-
-        // Gör texten enklare att jämföra.
-        const lowerContext =
-          context.toLowerCase();
-
-        const lowerMatchedText =
-          matchedText.toLowerCase().trim();
-
-
-        // -------------------------------------------------
-        // TOM TRÄFF
-        // -------------------------------------------------
-
-        // Ignorerar tomma träffar.
-        if (!lowerMatchedText) {
-          return false;
-        }
-
-
-        // -------------------------------------------------
-        // KORTA ORD
-        // -------------------------------------------------
-
-        // Ignorerar mycket korta ord
-        // eftersom dessa ofta ger falska träffar.
-        if (
-          lowerMatchedText.length <= 2
-        ) {
-          return false;
-        }
-
-
-        // -------------------------------------------------
-        // TEKNISKA IDENTIFIERARE
-        // -------------------------------------------------
-
-        // Ignorerar tekniska identifierare
-        // och tekniska ord som kan kännas igen
-        // utifrån hur ordet är uppbyggt.
-        if (
-          isTechnicalTerm(matchedText)
-        ) {
-          return false;
-        }
-
-
-        // -------------------------------------------------
-        // ÅTERKOMMANDE WEBBPLATSSPECIFIKA ORD
-        // -------------------------------------------------
-
-        // Om ett ord förekommer på flera olika sidor
-        // på samma webbplats kan det vara ett
-        // webbplatsspecifikt eller branschrelaterat ord.
-        //
-        // Vi hårdkodar inte specifika ord.
-        // Istället använder vi ordets faktiska
-        // förekomst på webbplatsen.
-        //
-        // Detta används endast för stavningsfel.
-        // Grammatikfel ska fortfarande kunna visas.
-        if (
-          siteWordFrequency &&
-          match.rule?.issueType === "misspelling" &&
-          lowerMatchedText.length >= 5
-        ) {
-
-          const frequency =
-            siteWordFrequency.get(
-              lowerMatchedText
-            ) || 0;
-
-
-          // Ett ord som förekommer på minst
-          // tre olika sidor betraktas som ett
-          // återkommande webbplatsspecifikt ord.
-          if (
-            frequency >= 3
-          ) {
-            return false;
-          }
-        }
-
-
-        // -------------------------------------------------
-        // TEKNISKA ORD / VARUMÄRKEN
-        // -------------------------------------------------
-
-        // Ignorerar vanliga tekniska ord
-        // och företags-/varumärkesnamn.
-        for (const word of ignoredWords) {
-
-          if (
-            lowerContext.includes(word) ||
-            lowerMatchedText === word
-          ) {
-            return false;
-          }
-        }
-
-
-        // -------------------------------------------------
-        // STOR BOKSTAV
-        // -------------------------------------------------
-
-        // Hämtar den första bokstaven.
-        const firstCharacter =
-          matchedText.trim().charAt(0);
-
-
-        // Kontrollerar om ordet börjar
-        // med stor bokstav.
-        const startsWithUppercase =
-          firstCharacter !==
-          firstCharacter.toLowerCase();
-
-
-        // -------------------------------------------------
-        // VERSALER
-        // -------------------------------------------------
-
-        // Kontrollerar om hela ordet är skrivet
-        // med stora bokstäver.
-        const isAllUppercase =
-          matchedText.trim().length > 1 &&
-          matchedText.trim() ===
-          matchedText.trim().toUpperCase();
-
-
-        // LanguageTool markerar ibland namn,
-        // företag och orter som stavfel.
-        // Därför ignorerar vi stavfel på ord
-        // som börjar med stor bokstav.
-        if (
-          startsWithUppercase &&
-          match.rule?.issueType === "misspelling"
-        ) {
-          return false;
-        }
-
-
-        // Ignorerar versaler som ofta är
-        // förkortningar eller namn.
-        if (
-          isAllUppercase &&
-          match.rule?.issueType === "misspelling"
-        ) {
-          return false;
-        }
-
-
-        // -------------------------------------------------
-        // FÖRSLAG
-        // -------------------------------------------------
-
-        // Hämtar LanguageTools förslag.
-        const suggestions =
-          (match.replacements || [])
-            .slice(0, 3)
-            .map(
-              (replacement: any) =>
-                replacement.value
-            );
-
-
-        // Om LanguageTool föreslår väldigt
-        // konstiga alternativ på ett kort ord
-        // är det ofta en falsk träff.
-        if (
-          match.rule?.issueType === "misspelling" &&
-          lowerMatchedText.length <= 4 &&
-          suggestions.length === 0
-        ) {
-          return false;
-        }
-
-
-        // Behåller resten av träffarna.
-        return true;
-      });
-
-
-    // -----------------------------------------------------
-    // DUBLETTER
-    // -----------------------------------------------------
-
-    // Tar bort dubbletter och återkommande falska träffar.
-    const uniqueMatches =
-      filteredMatches.filter(
-        (match: any, index: number, array: any[]) => {
-
-          // Hämtar texten som LanguageTool markerade.
-          const matchedText =
-            match.context?.text
-              ?.substring(
-                match.context.offset || 0,
-                (match.context.offset || 0) +
-                (match.context.length || 0)
-              )
-              .trim()
-              .toLowerCase() || "";
-
-
-          // Hämtar förslag från LanguageTool.
-          const suggestions =
-            (match.replacements || [])
-              .slice(0, 3)
-              .map(
-                (replacement: any) =>
-                  replacement.value
-                    .trim()
-                    .toLowerCase()
-              );
-
-
-          // Tar bort träffar där LanguageTool
-          // föreslår väldigt korta och uppenbart
-          // irrelevanta ord.
-          if (
-            matchedText.length <= 4 &&
-            suggestions.length > 0
-          ) {
-
-            const hasUsefulSuggestion =
-              suggestions.some(
-                (suggestion: string) =>
-                  suggestion.length >= 5
-              );
-
-            if (!hasUsefulSuggestion) {
-              return false;
-            }
-          }
-
-
-          // Skapar en unik nyckel för felet.
-          const currentKey =
-            `${match.rule?.id || ""}|` +
-            `${matchedText}|` +
-            `${suggestions.join(",")}`;
-
-
-          // Kontrollerar om exakt samma fel
-          // redan har hittats tidigare.
-          return (
-            array.findIndex(
-              (other: any) => {
-
-                const otherText =
-                  other.context?.text
-                    ?.substring(
-                      other.context.offset || 0,
-                      (other.context.offset || 0) +
-                      (other.context.length || 0)
-                    )
-                    .trim()
-                    .toLowerCase() || "";
-
-
-                const otherSuggestions =
-                  (other.replacements || [])
-                    .slice(0, 3)
-                    .map(
-                      (replacement: any) =>
-                        replacement.value
-                          .trim()
-                          .toLowerCase()
-                    );
-
-
-                const otherKey =
-                  `${other.rule?.id || ""}|` +
-                  `${otherText}|` +
-                  `${otherSuggestions.join(",")}`;
-
-
-                return (
-                  otherKey === currentKey
-                );
-              }
-            ) === index
-          );
-        }
+    if (!Array.isArray(data.matches)) {
+      console.log(
+        "⚠ LanguageTool returnerade ett oväntat svar."
       );
 
+      return {
+        errors: 0,
+        issues: [],
+        status: "WARNING",
+      };
+    }
 
-    // -----------------------------------------------------
-    // INGA FEL
-    // -----------------------------------------------------
+    // =====================================================
+    // FILTRERA LANGUAGE TOOL-TRÄFFAR
+    // =====================================================
 
-    // Om inga relevanta fel hittades.
-    if (
-      uniqueMatches.length === 0
-    ) {
+    const issues: TextIssue[] = [];
 
+    for (const match of data.matches) {
+      const matchedText = getMatchedText(match).trim();
+
+      if (!matchedText) {
+        continue;
+      }
+
+      const normalizedText = normalize(matchedText);
+      const context = match.context?.text ?? "";
+      const ruleId = match.rule?.id?.toLowerCase() ?? "";
+      const message = match.message ?? "Okänt textfel";
+
+      if (normalizedText.length <= 2) {
+        continue;
+      }
+
+      if (isTechnicalTerm(matchedText)) {
+        continue;
+      }
+
+      if (IGNORED_WORDS.has(normalizedText)) {
+        continue;
+      }
+
+      if (knownWords.has(normalizedText)) {
+        continue;
+      }
+
+      // Ignorera korta, helt versala förkortningar,
+      // exempelvis IMY.
+      if (/^[A-ZÅÄÖ]{2,6}$/.test(matchedText)) {
+        continue;
+      }
+
+      if (isTechnicalContext(matchedText, context)) {
+        continue;
+      }
+
+      // LanguageTool kan markera två identiska versala ord
+      // som ett korrekturfel när två rubriker ligger intill
+      // varandra i textutdraget.
+      const isDuplicateWordRule =
+        /repeat|duplicate|word_twice|repeated_word/i.test(
+          `${ruleId} ${message}`
+        );
+
+      if (
+        isDuplicateWordRule &&
+        isUppercaseRepeatedWord(matchedText)
+      ) {
+        continue;
+      }
+
+      issues.push({
+        message,
+        suggestions: getSuggestions(match),
+        context: context.replace(/\s+/g, " ").trim(),
+        matchedText,
+        pageUrl,
+      });
+    }
+
+    // =====================================================
+    // KONTROLLERA DUBBLA ORD
+    // =====================================================
+
+    issues.push(...findRepeatedWords(cleanedText, pageUrl));
+
+    // =====================================================
+    // TA BORT IDENTISKA FYND
+    // =====================================================
+
+    const uniqueIssues = issues.filter(
+      (issue, index, allIssues) => {
+        const key = issueKey(issue);
+
+        return (
+          allIssues.findIndex(
+            (candidate) => issueKey(candidate) === key
+          ) === index
+        );
+      }
+    );
+
+    // =====================================================
+    // RESULTAT
+    // =====================================================
+
+    if (uniqueIssues.length === 0) {
       console.log(
-        "✓ Inga relevanta stavnings- eller grammatikfel hittades"
+        `✓ Inga relevanta textfel hittades på ${pageUrl || "sidan"}.`
       );
 
       return {
@@ -622,124 +437,32 @@ export async function checkText(
       };
     }
 
-
-    // -----------------------------------------------------
-    // SKAPA TEXTISSUES
-    // -----------------------------------------------------
-
-    // Gör om LanguageTools resultat
-    // till vårt eget format.
-    const issues: TextIssue[] =
-      uniqueMatches.map(
-        (match: any) => {
-
-          // Hämtar själva ordet eller textdelen
-          // som LanguageTool markerade.
-          const matchedText =
-            match.context?.text
-              ?.substring(
-                match.context.offset || 0,
-                (match.context.offset || 0) +
-                (match.context.length || 0)
-              ) || "";
-
-
-          // Hämtar förslag på rättning.
-          const suggestions =
-            (match.replacements || [])
-              .slice(0, 3)
-              .map(
-                (replacement: any) =>
-                  replacement.value
-              );
-
-
-          return {
-            message:
-              match.message ||
-              "Okänt textfel",
-
-            suggestions,
-
-            context:
-              match.context?.text ||
-              "",
-
-            matchedText:
-              matchedText.trim(),
-
-            pageUrl,
-          };
-        }
-      );
-
-
-    // -----------------------------------------------------
-    // TERMINAL
-    // -----------------------------------------------------
-
-    // Visar resultaten i terminalen.
     console.log(
-      `⚠ ${issues.length} relevanta textfel hittades`
+      `⚠ ${uniqueIssues.length} möjliga textfel hittades på ${pageUrl || "sidan"}.`
     );
 
+    for (const issue of uniqueIssues) {
+      console.log(`- Felaktig text: ${issue.matchedText}`);
+      console.log(`  Sida: ${issue.pageUrl}`);
+      console.log(`  Sammanhang: ${issue.context}`);
+      console.log(`  Förklaring: ${issue.message}`);
 
-    // Visar varje hittat textfel.
-    for (const issue of issues) {
-
-      // Visar själva felet.
-      console.log(
-        `- ${issue.message}`
-      );
-
-
-      // Visar det exakta ordet
-      // som LanguageTool markerade.
-      console.log(
-        `  Felaktig text: ${issue.matchedText}`
-      );
-
-
-      // Visar sidan där felet hittades.
-      console.log(
-        `  Sida: ${issue.pageUrl}`
-      );
-
-
-      // Visar sammanhanget där felet hittades.
-      console.log(
-        `  Sammanhang: ${issue.context}`
-      );
-
-
-      // Visar förslag på rättning.
-      if (
-        issue.suggestions.length > 0
-      ) {
-
+      if (issue.suggestions.length > 0) {
         console.log(
           `  Förslag: ${issue.suggestions.join(", ")}`
         );
       }
     }
 
-
-    // -----------------------------------------------------
-    // RETURNERA RESULTAT
-    // -----------------------------------------------------
-
     return {
-      errors: issues.length,
-      issues,
+      errors: uniqueIssues.length,
+      issues: uniqueIssues,
       status: "WARNING",
     };
-
-
-  } catch {
-
-    // Hanterar problem med LanguageTool.
-    console.log(
-      "⚠ Kunde inte genomföra textkontrollen."
+  } catch (error) {
+    console.error(
+      "⚠ Textkontrollen kunde inte genomföras:",
+      error instanceof Error ? error.message : error
     );
 
     return {

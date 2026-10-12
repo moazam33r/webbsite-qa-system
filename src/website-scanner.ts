@@ -745,23 +745,32 @@ results.push({
         }
       });
 
+      // Tar bort element som inte ska ingå i textkontrollen.
+      const pageText = await page.evaluate(() => {
+        const selectorsToRemove = [
+          "script",
+          "style",
+          "noscript",
+          "nav",
+          "header",
+          "footer",
+          '[role="navigation"]',
+          '[aria-label*="cookie" i]',
+          '[id*="cookie" i]',
+          '[class*="cookie" i]',
+          '[id*="review" i]',
+          '[class*="review" i]',
+        ];
 
-      // ---------------------------------------------------
-      // HÄMTA TEXT
-      // ---------------------------------------------------
+        document
+          .querySelectorAll(selectorsToRemove.join(","))
+          .forEach((element) => element.remove());
 
-      // Hämtar endast synlig text från sidan.
-      const pageText =
-        await page.locator("body").innerText();
+        return document.body?.innerText ?? "";
+      });
 
-
-      // Sparar texten så att vi senare kan
-      // räkna vilka ord som återkommer på webbplatsen.
-      pageTexts.set(
-        pageUrl,
-        pageText
-      );
-
+      // Sparar texten från sidan för den fortsatta analysen.
+      pageTexts.set(pageUrl, pageText);
 
       // ---------------------------------------------------
       // PROGRESS
