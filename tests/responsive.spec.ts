@@ -2,46 +2,71 @@ import { test, expect } from "@playwright/test";
 import { checkResponsive } from "../src/checks/responsive";
 
 test("Responsive check", async ({ page }) => {
+  // Simulerar en webbplats för testet.
+  await page.route("https://qa-test.local/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      body: `
+        <!DOCTYPE html>
+        <html lang="sv">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Responsiv testwebbplats</title>
+            <style>
+              * {
+                box-sizing: border-box;
+              }
 
-  // Testet kan ta längre tid eftersom sidan kontrolleras
-  // i mobilstorlek och kan innehålla flera sidor.
-  test.setTimeout(180000);
+              body {
+                margin: 0;
+                font-family: Arial, sans-serif;
+              }
 
-  // Hämtar webbplatsen från TARGET_URL.
-  const url = process.env.TARGET_URL;
+              main {
+                width: 100%;
+                max-width: 900px;
+                margin: 0 auto;
+                padding: 16px;
+              }
 
-  // Stoppar testet om ingen webbplats har angetts.
-  if (!url) {
-    throw new Error("TARGET_URL måste anges");
-  }
+              img {
+                max-width: 100%;
+                height: auto;
+              }
+            </style>
+          </head>
+          <body>
+            <main>
+              <h1>Responsiv testwebbplats</h1>
+              <p>Den här sidan används för att testa mobilvyn.</p>
+            </main>
+          </body>
+        </html>
+      `,
+    });
+  });
 
-  // Skickar webbplatsen till responsivitetskontrollen.
-  const pages = [url];
+  // Kör responsivitetskontrollen på den simulerade sidan.
+  const result = await checkResponsive(page, [
+    "https://qa-test.local/",
+  ]);
 
-  // Kör kontrollen och sparar resultatet.
-  const result = await checkResponsive(
-    page,
-    pages
-  );
-
-  // Kontrollerar att resultatet innehåller
-  // antal godkända och underkända sidor.
+  // Kontrollerar att resultatet har rätt struktur.
   expect(result).toHaveProperty("passed");
   expect(result).toHaveProperty("failed");
 
-  // Kontrollerar att värdena är nummer.
   expect(typeof result.passed).toBe("number");
   expect(typeof result.failed).toBe("number");
 
-  // Kontrollerar att räknarna inte kan vara negativa.
+  // Säkerställer att räknarna inte är negativa.
   expect(result.passed).toBeGreaterThanOrEqual(0);
   expect(result.failed).toBeGreaterThanOrEqual(0);
 
   // Minst en sida ska ha kontrollerats.
-  expect(
-    result.passed + result.failed
-  ).toBeGreaterThan(0);
+  expect(result.passed + result.failed).toBeGreaterThan(0);
 
-  // Ett responsivitetsfel ska göra testet rött.
+  // Testet ska misslyckas om sidan har responsivitetsproblem.
   expect(result.failed).toBe(0);
 });

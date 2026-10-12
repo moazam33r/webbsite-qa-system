@@ -1,134 +1,119 @@
 import { test, expect } from "@playwright/test";
-
-import { checkPages } from "../src/checks/pages";
+import { createServer, Server } from "http";
 import { checkLinks } from "../src/checks/links";
 
 test("Links check", async ({ page }) => {
+  let server: Server;
 
-  // Webbplatsen vi testar
-  const url = "https://cktaxi.se/";
+  // Startar en lokal testserver utan externa nätverksanrop.
+  server = createServer((req, res) => {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
 
-  // Hittar automatiskt webbplatsens interna sidor
-  const pageResult = await checkPages(
-    page,
-    url
-  );
+    if (req.url === "/") {
+      res.statusCode = 200;
+      res.end(`
+        <!DOCTYPE html>
+        <html lang="sv">
+          <head><title>Startsida</title></head>
+          <body>
+            <h1>Välkommen</h1>
+            <a href="/kontakt/">Kontakt</a>
+            <a href="/extern/">Extern webbplats</a>
+            <a href="tel:+46701234567">Ring oss</a>
+            <a href="tel:070abc123">Ogiltigt telefonnummer</a>
+          </body>
+        </html>
+      `);
+      return;
+    }
 
-  // Hämtar sidorna som hittades
-  const pages = pageResult.links;
+    if (req.url === "/kontakt/") {
+      res.statusCode = 200;
+      res.end(`
+        <!DOCTYPE html>
+        <html lang="sv">
+          <head><title>Kontakt</title></head>
+          <body>
+            <h1>Kontakta oss</h1>
+            <p>Kontakta oss via telefon eller e-post.</p>
+          </body>
+        </html>
+      `);
+      return;
+    }
 
-  // Kör länkkontrollen och sparar resultatet
-  const result = await checkLinks(
-    page,
-    url,
-    pages
-  );
+    if (req.url === "/extern/") {
+      res.statusCode = 200;
+      res.end("<html><head><title>Extern sida</title></head><body>Extern test</body></html>");
+      return;
+    }
 
-  // =======================================================
-  // VANLIGA LÄNKRESULTAT
-  // =======================================================
+    res.statusCode = 404;
+    res.end("<h1>Sidan hittades inte</h1>");
+  });
 
-  // Kontrollerar att alla vanliga resultat finns
-  expect(result).toHaveProperty("internalPassed");
-  expect(result).toHaveProperty("internalFailed");
-  expect(result).toHaveProperty("externalPassed");
-  expect(result).toHaveProperty("externalFailed");
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
 
-  // Kontrollerar att alla räknare är nummer
-  expect(typeof result.internalPassed).toBe("number");
-  expect(typeof result.internalFailed).toBe("number");
-  expect(typeof result.externalPassed).toBe("number");
-  expect(typeof result.externalFailed).toBe("number");
+  try {
+    const address = server.address();
 
-  // Kontrollerar att inga räknare kan vara negativa
-  expect(result.internalPassed).toBeGreaterThanOrEqual(0);
-  expect(result.internalFailed).toBeGreaterThanOrEqual(0);
-  expect(result.externalPassed).toBeGreaterThanOrEqual(0);
-  expect(result.externalFailed).toBeGreaterThanOrEqual(0);
+    if (!address || typeof address === "string") {
+      throw new Error("Kunde inte starta den lokala testservern");
+    }
 
+    const baseUrl = `http://127.0.0.1:${address.port}/`;
+    const contactUrl = `${baseUrl}kontakt/`;
+    const externalUrl = `${baseUrl}extern/`;
 
-  // =======================================================
-  // LINK INTENT RESULTAT
-  // =======================================================
+    await page.goto(baseUrl);
 
-  // Kontrollerar att den nya Link Intent-kontrollen
-  // returnerar rätt resultat.
-  expect(result).toHaveProperty("intentFailures");
-  expect(result).toHaveProperty("intentFailed");
+    const result = await checkLinks(page, baseUrl, [
+      baseUrl,
+      contactUrl,
+    ]);
 
-  // intentFailures ska vara en array.
-  expect(
-    Array.isArray(result.intentFailures)
-  ).toBe(true);
+    expect(result).toHaveProperty("internalPassed");
+    expect(result).toHaveProperty("internalFailed");
+    expect(result).toHaveProperty("externalPassed");
+    expect(result).toHaveProperty("externalFailed");
+    expect(result).toHaveProperty("linkFailures");
+    expect(result).toHaveProperty("phoneLinks");
+    expect(result).toHaveProperty("intentFailures");
+    expect(result).toHaveProperty("intentFailed");
 
-  // intentFailed ska vara ett nummer.
-  expect(
-    typeof result.intentFailed
-  ).toBe("number");
+    // Kontaktlänken ska fungera.
+    expect(result.internalPassed).toBeGreaterThan(0);
+    expect(result.internalFailed).toBe(0);
 
-  // Antalet intent-fel ska aldrig vara negativt.
-  expect(
-    result.intentFailed
-  ).toBeGreaterThanOrEqual(0);
+    // Den externa länken testas separat i ett eget anrop.
+    const externalResponse = await page.request.get(externalUrl);
+    expect(externalResponse.status()).toBe(200);
 
-  // Antalet rapporterade intent-fel ska stämma
-  // överens med längden på arrayen.
-  expect(
-    result.intentFailed
-  ).toBe(
-    result.intentFailures.length
-  );
+    // Telefonlänkarna ska valideras.
+    expect(result.phoneLinks).toHaveLength(2);
+    expect(result.phoneLinks.some((phone) => phone.valid)).toBe(true);
+    expect(result.phoneLinks.some((phone) => !phone.valid)).toBe(true);
 
+    // Link Intent-resultatet ska ha en giltig struktur.
+    expect(Array.isArray(result.intentFailures)).toBe(true);
+    expect(result.intentFailed).toBe(result.intentFailures.length);
 
-  // =======================================================
-  // TOTALA LÄNKAR
-  // =======================================================
-
-  // Räknar totalt antal länkar som kontrollerades.
-  const totalLinks =
-    result.internalPassed +
-    result.internalFailed +
-    result.externalPassed +
-    result.externalFailed;
-
-  // Minst en länk ska ha kontrollerats.
-  expect(totalLinks).toBeGreaterThan(0);
-
-
-  // =======================================================
-  // LOGGAR LINK INTENT RESULTATET
-  // =======================================================
-
-  // Visar en tydlig sammanfattning i testresultatet.
-  console.log(
-    `\nLink Intent: ${result.intentFailed} möjliga felaktiga destinationer hittades.`
-  );
-
-  // Visar detaljer om någon länk verkar leda till fel sida.
-  for (const failure of result.intentFailures) {
-
-    console.log(
-      `\n⚠ Link Intent Problem`
-    );
-
-    console.log(
-      `Länktext: ${failure.linkText}`
-    );
-
-    console.log(
-      `Förväntat: ${failure.expected}`
-    );
-
-    console.log(
-      `Destination: ${failure.targetUrl}`
-    );
-
-    console.log(
-      `Title: ${failure.targetTitle || "saknas"}`
-    );
-
-    console.log(
-      `H1: ${failure.targetHeading || "saknas"}`
-    );
+    console.log("\nLink check testresultat:");
+    console.log(`Interna länkar godkända: ${result.internalPassed}`);
+    console.log(`Interna länkar underkända: ${result.internalFailed}`);
+    console.log(`Telefonlänkar kontrollerade: ${result.phoneLinks.length}`);
+    console.log(`Link Intent-varningar: ${result.intentFailed}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
   }
 });

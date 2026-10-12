@@ -1,29 +1,39 @@
 import { test, expect } from "@playwright/test";
 
 test("Playwright fungerar", async ({ page }) => {
+  // Simulerar en webbplats utan externa nätverksanrop.
+  await page.route("https://qa-test.local/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      body: `
+        <!DOCTYPE html>
+        <html lang="sv">
+          <head>
+            <meta charset="UTF-8">
+            <title>Testwebbplats</title>
+          </head>
+          <body>
+            <h1>Playwright fungerar</h1>
+          </body>
+        </html>
+      `,
+    });
+  });
 
-  // Hämtar webbplatsen som ska testas från TARGET_URL.
-  const url = process.env.TARGET_URL;
+  // Öppnar den simulerade webbplatsen.
+  const response = await page.goto("https://qa-test.local/");
 
-  // Stoppar testet om ingen webbplats har angetts.
-  if (!url) {
-    throw new Error(
-      "TARGET_URL måste anges"
-    );
-  }
-
-  // Öppnar webbplatsen och sparar HTTP-svaret.
-  const response = await page.goto(url);
-
-  // Säkerställer att ett HTTP-svar faktiskt kom tillbaka.
+  // Kontrollerar att sidan svarar korrekt.
   expect(response).not.toBeNull();
-
-  // Webbplatsens startsida ska svara med status 200.
   expect(response?.status()).toBe(200);
 
-  // Kontrollerar att sidan har en giltig URL.
-  expect(page.url()).toContain(url);
+  // Kontrollerar att rätt sida öppnades.
+  await expect(page).toHaveURL("https://qa-test.local/");
 
-  // Kontrollerar att sidan har en titel.
-  await expect(page).toHaveTitle(/.+/);
+  // Kontrollerar sidans titel och innehåll.
+  await expect(page).toHaveTitle("Testwebbplats");
+  await expect(
+    page.getByRole("heading", { name: "Playwright fungerar" })
+  ).toBeVisible();
 });
