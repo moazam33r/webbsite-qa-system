@@ -273,6 +273,16 @@ function destinationMatchesIntent(
       return true;
   }
 }
+/**
+ * Tar bort ANSI-koder från terminalutdata.
+ * Förhindrar att kontrollkoder visas i felmeddelanden
+ * och rapporter.
+ */
+function cleanTerminalCodes(value: string): string {
+  return value
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u009B[0-?]*[ -/]*[@-~]/g, "");
+}
 
 /**
  * Kontrollerar länkar på webbplatsen.
@@ -319,13 +329,13 @@ export async function checkLinks(
         timeout: 30000,
       });
 
-      // Hämtar alla länkar från sidan.
-      const links = await page.locator("a").evaluateAll((anchors) =>
-        anchors.map((anchor) => ({
-          href: (anchor as HTMLAnchorElement).href,
-          text: (anchor.textContent || "").trim(),
-        }))
-      );
+      
+const links = await page.locator("a").evaluateAll((anchors) =>
+  anchors.map((anchor) => ({
+    href: (anchor as HTMLAnchorElement).href,
+    text: (anchor.textContent || "").trim(),
+  }))
+);
 
       // Undviker att kontrollera exakt samma URL flera gånger
       // på samma sida.
@@ -405,40 +415,65 @@ export async function checkLinks(
         // Bestämmer om länken är intern eller extern.
         const internal = isInternalLink(href);
 
-        try {
-          // Gör en HTTP-request mot länken.
-          const response = await page.request.get(href, {
-            timeout: 15000,
-            failOnStatusCode: false,
-          });
+        let lastError: unknown;
+        let linkChecked = false;
 
-          const status = response.status();
-
-          // HTTP-status 200-399 räknas som fungerande.
-          if (status >= 200 && status < 400) {
-            if (internal) {
-              internalPassed++;
-            } else {
-              externalPassed++;
-            }
-          } else {
-            // Länken svarar men med felaktig HTTP-status.
-            if (internal) {
-              internalFailed++;
-            } else {
-              externalFailed++;
-            }
-
-            linkFailures.push({
-              sourcePage,
-              url: href,
-              type: internal ? "intern" : "extern",
-              status,
-              error: `HTTP ${status}`,
+        // Försöker kontrollera länken högst två gånger.
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            const response = await page.request.get(href, {
+              timeout: 15000,
+              failOnStatusCode: false,
             });
+
+            const status = response.status();
+
+            // HTTP-status 200-399 räknas som fungerande.
+            if (status >= 200 && status < 400) {
+              if (internal) {
+                internalPassed++;
+              } else {
+                externalPassed++;
+              }
+            } else {
+              // Länken svarar men med felaktig HTTP-status.
+              if (internal) {
+                internalFailed++;
+              } else {
+                externalFailed++;
+              }
+
+              linkFailures.push({
+                sourcePage,
+                url: href,
+                type: internal ? "intern" : "extern",
+                status,
+                error: `HTTP ${status}`,
+              });
+            }
+
+            linkChecked = true;
+            break;
+          } catch (error) {
+            lastError = error;
+
+            // Gör ett nytt försök efter det första misslyckandet.
+            if (attempt === 1) {
+              console.warn(`Nytt försök för länken: ${href}`);
+            }
           }
-        } catch (error) {
-          // Requesten kunde inte genomföras.
+        }
+
+        // Registrerar felet om båda försöken misslyckades.
+        if (!linkChecked) {
+          const errorMessage =
+            lastError instanceof Error
+              ? lastError.message.replace(
+                  /\u001B\[[0-?]*[ -/]*[@-~]/g,
+                  ""
+                )
+              : "Okänt anslutningsfel";
+
           if (internal) {
             internalFailed++;
           } else {
@@ -449,10 +484,7 @@ export async function checkLinks(
             sourcePage,
             url: href,
             type: internal ? "intern" : "extern",
-            error:
-              error instanceof Error
-                ? error.message
-                : "Okänt anslutningsfel",
+            error: errorMessage,
           });
         }
 

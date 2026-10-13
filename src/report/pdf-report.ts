@@ -497,97 +497,198 @@ function extractField(
 
 function parseTextFindings(result: QACheckResult): Finding[] {
     const message = cleanMessage(result.message);
-
     if (!message) return [];
 
     const findings: Finding[] = [];
 
-    // Stödjer meddelanden som innehåller:
-    // Felaktig text: "ord"
-    // Förslag: ...
-    // Sida: https://...
-    // Sammanhang: ...
-    //
-    // Flera fel kan finnas i samma meddelande.
+    const labels = [
+        "Klassificering",
+        "Markerad text",
+        "Felaktig text",
+        "Förslag",
+        "Sida",
+        "Sammanhang",
+        "Förklaring från LanguageTool",
+        "Förklaring",
+        "AI-bedömning",
+        "LanguageTool-regel",
+        "Typ",
+    ];
 
+    // Dela upp resultatet i separata textfynd.
     const sections = message
-        .split(/\s+-\s+Felaktig text\s*:/i)
-        .slice(1);
-
-    for (const section of sections) {
-        const matchedMatch = section.match(
-            /^\s*["“]([^"”]+)["”]/
+        .split(
+            /\s+-\s+(?=(?:Klassificering|Markerad text|Felaktig text)\s*:)/i
+        )
+        .filter((section) =>
+            /(?:Klassificering|Markerad text|Felaktig text)\s*:/i.test(
+                section
+            )
         );
 
-        const matchedText = matchedMatch?.[1]?.trim();
+    let parsedSections = 0;
+
+    for (const section of sections) {
+        // Hämta själva ordet, inte klassificeringen.
+        const rawMatchedText = extractField(section, [
+            "Markerad text",
+            "Felaktig text",
+        ]);
+
+        if (!rawMatchedText) continue;
+
+        parsedSections++;
+
+        const matchedText = rawMatchedText
+            .replace(/^[“"']|[”"']$/g, "")
+            .trim();
 
         if (!matchedText) continue;
+
+        const classification =
+            extractField(section, ["Klassificering"]) ?? "";
+
+        const aiExplanation =
+            extractField(section, [
+                "AI-bedömning",
+                "LanguageTool-regel",
+                "Typ",
+            ]) ?? "";
+
+        const classificationText = classification.toLowerCase();
+        const aiText = aiExplanation.toLowerCase();
+
+        // AI:ns slutliga klassificering ska styra.
+        // Korrekta ord ska inte bli prioriterade PDF-fynd.
+        const explicitlyLikelyCorrect =
+            /likely_correct|troligen korrekt|sannolikt korrekt/i.test(
+                classificationText
+            );
+
+        const explicitlySpellingError =
+            /likely_spelling_error|sannolikt stavfel|troligt stavfel|needs_review|manuell granskning/i.test(
+                classificationText
+            );
+
+        const aiSaysCorrect =
+            /är korrekt i sammanhanget|ordet .{0,100} är korrekt|korrekt i sammanhanget/i.test(
+                aiText
+            );
+
+        if (
+            explicitlyLikelyCorrect ||
+            (!explicitlySpellingError && aiSaysCorrect)
+        ) {
+            continue;
+        }
 
         const suggestions =
             extractField(section, [
                 "Förslag",
                 "Sida",
                 "Sammanhang",
+                "Förklaring från LanguageTool",
                 "Förklaring",
-            ]) ?? "Inget förslag";
+                "AI-bedömning",
+                "LanguageTool-regel",
+                "Typ",
+            ]) ?? "";
+
+        const pageField = extractField(section, [
+            "Sida",
+            "Sammanhang",
+            "Förklaring från LanguageTool",
+            "Förklaring",
+            "AI-bedömning",
+            "LanguageTool-regel",
+            "Typ",
+        ]);
 
         const pageUrl =
-            extractField(section, [
-                "Sida",
-                "Sammanhang",
-                "Förklaring",
-            ])?.match(/https?:\/\/[^\s]+/i)?.[0] ?? "";
+            pageField?.match(/https?:\/\/[^\s]+/i)?.[0] ?? "";
 
         const context =
             extractField(section, [
                 "Sammanhang",
+                "Förklaring från LanguageTool",
                 "Förklaring",
+                "AI-bedömning",
+                "LanguageTool-regel",
+                "Typ",
             ]) ?? "";
 
-        const explanation =
-            extractField(section, ["Förklaring"]) ?? "";
+        const languageToolExplanation =
+            extractField(section, [
+                "Förklaring från LanguageTool",
+                "Förklaring",
+                "AI-bedömning",
+                "LanguageTool-regel",
+                "Typ",
+            ]) ?? "";
 
-        const cleanSuggestions = suggestions
-            .replace(/\s+Sida:.*$/i, "")
-            .trim();
+        const descriptionParts: string[] = [];
 
-        const cleanContext = context
-            .replace(/\s+Förklaring:.*$/i, "")
-            .trim();
+        if (suggestions) {
+            descriptionParts.push(`Föreslagna rättningar: ${suggestions}`);
+        }
 
-        const suggestionText =
-            cleanSuggestions || "Inget förslag";
+        if (languageToolExplanation) {
+            descriptionParts.push(
+                `LanguageTool: ${languageToolExplanation}`
+            );
+        }
+
+        if (aiExplanation) {
+            descriptionParts.push(`AI-bedömning: ${aiExplanation}`);
+        }
+
+        const description =
+            descriptionParts.join("\n") ||
+            "Textträffen behöver granskas manuellt.";
+
+        // Undvik identiska fynd på samma sida och i samma sammanhang.
+        const isDuplicate = findings.some(
+            (finding) =>
+                finding.matchedText === matchedText &&
+                finding.pages.includes(pageUrl) &&
+                finding.context === context.trim()
+        );
+
+        if (isDuplicate) continue;
 
         findings.push({
-            priority: "Viktig",
+            priority: explicitlySpellingError ? "Viktig" : "Liten",
             category: result.name,
-            title: `Möjligt textfel: "${matchedText}"`,
-            description:
-                suggestionText === "Inget förslag"
-                    ? explanation ||
-                      "Ingen automatisk ersättning föreslogs. Kontrollera ordet manuellt."
-                    : `Föreslaget ord: ${suggestionText}`,
+            title: explicitlySpellingError
+                ? `Möjligt stavfel: "${matchedText}"`
+                : `Textträff för granskning: "${matchedText}"`,
+            description,
             pages: pageUrl ? [pageUrl] : [],
             matchedText,
-            suggestions: suggestionText,
-            context: cleanContext,
+            suggestions: suggestions || "Inget förslag",
+            context: context.trim(),
         });
     }
 
-    // Om textkontrollen rapporterat textfel men formatet inte
-    // gick att tolka, visa ändå ett fynd i stället för att
-    // tappa resultatet helt.
+    // Om vi lyckades läsa textfynden men alla bedömdes korrekta,
+    // returnera inga fynd. Skapa inte ett generiskt falsklarm.
+    if (parsedSections > 0 && findings.length === 0) {
+        return [];
+    }
 
+    // Reservhantering om formatet är okänt eller inte kan läsas.
     if (
-        findings.length === 0 &&
-        /textfel|stavfel|möjliga textfel|möjligt textfel/i.test(message)
+        parsedSections === 0 &&
+        /textfel|stavfel|möjliga textfel|möjligt textfel|markerad text|klassificering/i.test(
+            message
+        )
     ) {
         findings.push({
-            priority: "Viktig",
+            priority: "Liten",
             category: result.name,
-            title: "Textkontrollen rapporterade möjliga textfel",
+            title: "Textresultatet behöver granskas",
             description:
-                "Resultatet kunde inte delas upp i individuella textfynd. Kontrollera originalmeddelandet i den tekniska bilagan.",
+                "Textresultatet kunde inte delas upp i individuella fynd. Se originalresultatet i den tekniska bilagan.",
             pages: extractUrls(message),
         });
     }
@@ -660,8 +761,19 @@ function deriveFindings(results: QACheckResult[]): Finding[] {
         }
 
         if (derived.length === 0) {
-            derived = [buildGenericFinding(result)];
-        }
+    // Om textfynd har lästs och alla bedömts som korrekta
+    // ska vi inte skapa ett generiskt falsklarm.
+    if (
+        /text|stavning/i.test(result.name) &&
+        /(?:Klassificering:\s*(?:AI bedömer texten som\s*)?(?:troligen korrekt|sannolikt korrekt|LIKELY_CORRECT))/i.test(
+            cleanMessage(result.message)
+        )
+    ) {
+        continue;
+    }
+
+    derived = [buildGenericFinding(result)];
+}
 
         findings.push(...derived);
     }

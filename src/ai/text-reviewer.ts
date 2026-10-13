@@ -11,20 +11,30 @@ export interface ReviewedTextIssue extends TextIssue {
   aiExplanation: string;
 }
 
-// Funktionstyp för AI-granskningen.
-// Gör det möjligt att simulera AI-svar i tester utan att starta Ollama.
+// Gör det möjligt att testa AI-granskningen utan att starta Ollama.
 export type TextReviewFunction = (prompt: string) => Promise<string>;
 
 const DEFAULT_EXPLANATION =
   "Träffen kunde inte verifieras och behöver vid behov granskas manuellt.";
 
-// Kontrollerar AI:s bedömning mot LanguageTools ursprungliga klassificering.
+const VALID_ASSESSMENTS: AITextAssessment[] = [
+  "LIKELY_SPELLING",
+  "LIKELY_CORRECT",
+  "REVIEW",
+];
+
+// Mindre batchar minskar risken att Ollama kapar JSON-svaret.
+const BATCH_SIZE = 4;
+
+// Försök igen om AI:n returnerar ett ofullständigt eller ogiltigt svar.
+const MAX_ATTEMPTS = 2;
+
+// AI:n får inte ensam uppgradera en osäker träff till ett bekräftat stavfel.
 export function applyAssessmentGuard(
   originalIssue: TextIssue,
   assessment: AITextAssessment,
   explanation: string
 ): { assessment: AITextAssessment; explanation: string } {
-  // AI får inte uppgradera en osäker träff till ett bekräftat stavfel.
   if (
     originalIssue.classification === "REVIEW" &&
     assessment === "LIKELY_SPELLING"
@@ -39,30 +49,248 @@ export function applyAssessmentGuard(
 
   return {
     assessment,
-    explanation: explanation.slice(0, 500),
+    explanation: explanation.slice(0, 300),
   };
 }
 
-// Granskar möjliga stavfel från LanguageTool med lokal AI.
-// En alternativ granskningsfunktion kan skickas in vid testning.
+// Tar bort interna resonemang och kodmarkeringar från AI-svaret.
+function cleanAIResponse(response: string): string {
+  return response
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/```(?:json)?/gi, "")
+    .trim();
+}
+
+interface ParsedAssessment {
+  id: number;
+  assessment: AITextAssessment;
+  explanation: string;
+}
+
+interface ParsedAIResponse {
+  results: ParsedAssessment[];
+}
+
+// Försöker läsa en fullständig JSON-struktur från AI-svaret.
+function parseAIResponse(response: string): ParsedAssessment[] | null {
+  const cleaned = cleanAIResponse(response);
+  const jsonStart = cleaned.indexOf("{");
+  const jsonEnd = cleaned.lastIndexOf("}");
+
+  if (jsonStart === -1 || jsonEnd <= jsonStart) {
+    return null;
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
+  } catch {
+    return null;
+  }
+
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("results" in parsed) ||
+    !Array.isArray((parsed as ParsedAIResponse).results)
+  ) {
+    return null;
+  }
+
+  const validResults: ParsedAssessment[] = [];
+
+  for (const item of (parsed as ParsedAIResponse).results) {
+    if (typeof item !== "object" || item === null) {
+      continue;
+    }
+
+    if (
+      !("id" in item) ||
+      !("assessment" in item) ||
+      !("explanation" in item)
+    ) {
+      continue;
+    }
+
+    const { id, assessment, explanation } = item;
+
+    if (
+      typeof id !== "number" ||
+      !Number.isInteger(id) ||
+      id < 0 ||
+      typeof assessment !== "string" ||
+      !VALID_ASSESSMENTS.includes(assessment as AITextAssessment) ||
+      typeof explanation !== "string"
+    ) {
+      continue;
+    }
+
+    validResults.push({
+      id,
+      assessment: assessment as AITextAssessment,
+      explanation: explanation.slice(0, 300),
+    });
+  }
+
+  return validResults;
+}
+
+// Skapar en kortare prompt som minskar risken för kapade svar.
+function createPrompt(
+  candidates: Array<{
+    id: number;
+    ord: string;
+    sammanhang: string;
+    regel: string;
+    typ: string;
+    forslag: string[];
+    sida: string;
+    ursprungligBedomning: string;
+  }>
+): string {
+  return `
+Du är en noggrann svensk korrekturläsare.
+
+Granska varje fynd separat utifrån ordet och sammanhanget.
+
+Välj en bedömning per id:
+
+LIKELY_SPELLING:
+Tydliga belägg för ett verkligt stavfel.
+
+LIKELY_CORRECT:
+Ordet är korrekt i sammanhanget, exempelvis ett fackord,
+ett sammansatt ord, ett gatunamn eller en teknisk identifierare.
+
+REVIEW:
+Det går inte att avgöra säkert.
+
+REGLER:
+- LanguageTools markering bevisar inte att ordet är fel.
+- LanguageTools förslag kan vara felaktiga.
+- Svenska sammansättningar och fackord kan vara korrekta.
+- Gatunamn och andra egennamn ska inte ändras utan belägg.
+- WordPress-cookienamn och tekniska identifierare ska bedömas
+  som tekniska uttryck när sammanhanget visar det.
+- Om ordet passar i sammanhanget, välj LIKELY_CORRECT.
+- Om du är osäker, välj REVIEW.
+- Bedöm inte samma id mer än en gång.
+- Om ursprungligBedomning är REVIEW får du inte välja LIKELY_SPELLING.
+- Hitta inte på information som saknas.
+
+Skriv en förklaring på svenska med högst 12 ord.
+
+Returnera ett resultat för varje id.
+Skriv ENDAST giltig JSON, utan markdown eller annan text.
+
+Format:
+{
+  "results": [
+    {
+      "id": 0,
+      "assessment": "LIKELY_CORRECT",
+      "explanation": "Ordet passar i sammanhanget."
+    }
+  ]
+}
+
+Fynd:
+${JSON.stringify(candidates)}
+`;
+}
+
+// Granskar en batch och försöker igen om svaret är ogiltigt
+// eller saknar en eller flera förväntade bedömningar.
+async function reviewBatch(
+  prompt: string,
+  reviewWithAI: TextReviewFunction,
+  batchNumber: number,
+  expectedCount: number
+): Promise<ParsedAssessment[]> {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const retryPrompt = `
+${prompt}
+
+VIKTIGT: Föregående svar var ogiltigt eller ofullständigt.
+Returnera exakt ett resultat för varje id i fynden.
+Alla id:n måste finnas med, utan dubbletter.
+Håll varje förklaring mycket kort.
+Skriv ingen text utanför JSON.
+`;
+
+      const response = await reviewWithAI(
+        attempt === 1 ? prompt : retryPrompt
+      );
+
+      const results = parseAIResponse(response);
+
+      if (results !== null) {
+        const validIds = new Set(
+          results
+            .filter(
+              (item) =>
+                item.id >= 0 &&
+                item.id < expectedCount
+            )
+            .map((item) => item.id)
+        );
+
+        if (validIds.size === expectedCount) {
+          return results;
+        }
+
+        console.warn(
+          `AI-batch ${batchNumber}: fick ${validIds.size} av ` +
+            `${expectedCount} förväntade bedömningar, ` +
+            `försök ${attempt}/${MAX_ATTEMPTS}.`
+        );
+      } else {
+        console.warn(
+          `AI-batch ${batchNumber}: ogiltigt JSON-svar, ` +
+            `försök ${attempt}/${MAX_ATTEMPTS}.`
+        );
+      }
+    } catch (error) {
+      console.error(
+        `AI-batch ${batchNumber} misslyckades, ` +
+          `försök ${attempt}/${MAX_ATTEMPTS}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  console.error(
+    `AI-batch ${batchNumber} kunde inte granskas. ` +
+      "Fynden behåller REVIEW."
+  );
+
+  return [];
+}
+
+// Granskar möjliga textfel med lokal AI.
 export async function reviewTextIssues(
   issues: TextIssue[],
   reviewWithAI: TextReviewFunction = askOllama
 ): Promise<ReviewedTextIssue[]> {
-  const reviewIssues: ReviewedTextIssue[] = issues.map((issue) => ({
+  // Alla fynd börjar säkert som REVIEW.
+  const reviewedIssues: ReviewedTextIssue[] = issues.map((issue) => ({
     ...issue,
     aiAssessment: "REVIEW",
     aiExplanation: DEFAULT_EXPLANATION,
   }));
 
   if (issues.length === 0) {
-    return reviewIssues;
+    return reviewedIssues;
   }
 
-  const batchSize = 10;
-
-  for (let start = 0; start < issues.length; start += batchSize) {
-    const batch = issues.slice(start, start + batchSize);
+  for (
+    let start = 0, batchNumber = 1;
+    start < issues.length;
+    start += BATCH_SIZE, batchNumber++
+  ) {
+    const batch = issues.slice(start, start + BATCH_SIZE);
 
     const candidates = batch.map((issue, index) => ({
       id: index,
@@ -75,173 +303,57 @@ export async function reviewTextIssues(
       ursprungligBedomning: issue.classification,
     }));
 
-    const prompt = `
-Du är en erfaren svensk korrekturläsare som granskar möjliga
-stavfel på svenska webbplatser.
+    const prompt = createPrompt(candidates);
 
-Granska varje fynd separat och använd hela sammanhanget.
+    const results = await reviewBatch(
+      prompt,
+      reviewWithAI,
+      batchNumber,
+      batch.length
+    );
 
-Välj exakt en bedömning:
+    const processedIds = new Set<number>();
 
-LIKELY_SPELLING:
-Använd endast när det finns tydliga belägg för ett verkligt
-stavfel och en rimlig rättelse som passar sammanhanget.
-
-LIKELY_CORRECT:
-Använd när ordet är korrekt och passar sammanhanget.
-
-REVIEW:
-Använd när du inte kan avgöra frågan med tillräcklig säkerhet.
-
-VIKTIGA REGLER:
-1. LanguageTools markering bevisar inte att ordet är fel.
-2. Förslag från LanguageTool kan vara felaktiga.
-3. Svenska sammansättningar kan vara långa och ovanliga.
-4. Fackord och tekniska ord kan vara korrekta även om de är ovanliga.
-5. Böjningsformer och genitivformer kan vara korrekta.
-6. Ersätt inte ett ord med ett förslag som har en annan betydelse.
-7. Hitta inte på rättelser.
-8. Om ordet fungerar i sammanhanget ska det inte klassificeras
-   som stavfel bara för att ett annat ord föreslås.
-9. Bedöm varje förekomst separat.
-10. Om du är osäker ska du välja REVIEW.
-
-VIKTIG BEGRÄNSNING:
-Fältet ursprungligBedomning visar LanguageTools första bedömning.
-
-Om ursprungligBedomning är REVIEW får du inte välja
-LIKELY_SPELLING. Du får endast välja LIKELY_CORRECT eller REVIEW.
-
-Om ursprungligBedomning är LIKELY_SPELLING ska du kontrollera
-om träffen verkligen verkar vara ett stavfel.
-
-Returnera exakt ett resultat för varje id.
-Behåll samma id och returnera endast giltig JSON.
-
-Format:
-{
-  "results": [
-    {
-      "id": 0,
-      "assessment": "REVIEW",
-      "explanation": "Ordet behöver bedömas utifrån sammanhanget."
-    }
-  ]
-}
-
-Fynd att granska:
-${JSON.stringify(candidates)}
-`;
-
-    try {
-      const response = await reviewWithAI(prompt);
-      console.log("RÅTT SVAR FRÅN AI:", response);
-
-      // Tar bort eventuella interna resonemang och kodmarkeringar.
-      const cleaned = response
-        .replace(/<think>[\s\S]*?<\/think>/gi, "")
-        .replace(/```(?:json)?/gi, "")
-        .trim();
-
-      const jsonStart = cleaned.indexOf("{");
-      const jsonEnd = cleaned.lastIndexOf("}");
-
-      if (jsonStart === -1 || jsonEnd <= jsonStart) {
-        console.error("AI RETURNERADE INGEN GILTIG JSON:", cleaned);
-        continue;
-      }
-
-      let parsed: unknown;
-
-      try {
-        parsed = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1));
-      } catch (error) {
-        console.error(
-          "KUNDE INTE LÄSA AI-SVARETS JSON:",
-          error instanceof Error ? error.message : String(error)
-        );
-        continue;
-      }
-
+    for (const item of results) {
       if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        !("results" in parsed) ||
-        !Array.isArray(parsed.results)
+        item.id < 0 ||
+        item.id >= batch.length ||
+        processedIds.has(item.id)
       ) {
-        console.error("AI-SVARET SAKNAR EN GILTIG results-LISTA.");
         continue;
       }
 
-      const processedIds = new Set<number>();
+      processedIds.add(item.id);
 
-      for (const item of parsed.results) {
-        if (
-          typeof item !== "object" ||
-          item === null ||
-          !("id" in item) ||
-          !("assessment" in item) ||
-          !("explanation" in item)
-        ) {
-          continue;
-        }
+      const originalIssue = batch[item.id];
 
-        const id = item.id;
-        const assessment = item.assessment;
-        const explanation = item.explanation;
+      const guarded = applyAssessmentGuard(
+        originalIssue,
+        item.assessment,
+        item.explanation
+      );
 
-        if (
-          typeof id !== "number" ||
-          !Number.isInteger(id) ||
-          id < 0 ||
-          id >= batch.length ||
-          processedIds.has(id) ||
-          typeof explanation !== "string" ||
-          ![
-            "LIKELY_SPELLING",
-            "LIKELY_CORRECT",
-            "REVIEW",
-          ].includes(String(assessment))
-        ) {
-          continue;
-        }
+      const targetIndex = start + item.id;
 
-        processedIds.add(id);
+      reviewedIssues[targetIndex] = {
+        ...reviewedIssues[targetIndex],
+        aiAssessment: guarded.assessment,
+        aiExplanation: guarded.explanation,
+      };
+    }
 
-        const originalIssue = batch[id];
+    const missingIds = batch
+      .map((_, index) => index)
+      .filter((id) => !processedIds.has(id));
 
-        const guarded = applyAssessmentGuard(
-          originalIssue,
-          assessment as AITextAssessment,
-          explanation
-        );
-
-        const targetIndex = start + id;
-
-        reviewIssues[targetIndex] = {
-          ...reviewIssues[targetIndex],
-          aiAssessment: guarded.assessment,
-          aiExplanation: guarded.explanation,
-        };
-      }
-
-      const missingIds = batch
-        .map((_, index) => index)
-        .filter((id) => !processedIds.has(id));
-
-      if (missingIds.length > 0) {
-        console.warn(
-          "AI SAKNADE GILTIGA BEDÖMNINGAR FÖR ID:",
-          missingIds
-        );
-      }
-    } catch (error) {
-      console.error(
-        "AI-GRANSKNING MISSLYCKADES:",
-        error instanceof Error ? error.message : String(error)
+    if (missingIds.length > 0) {
+      console.warn(
+        `AI-batch ${batchNumber} saknar bedömningar för id:`,
+        missingIds
       );
     }
   }
 
-  return reviewIssues;
+  return reviewedIssues;
 }
+

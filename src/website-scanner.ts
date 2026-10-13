@@ -16,8 +16,9 @@ import { checkCookieGdpr } from "./checks/cookie-gdpr";
 import { checkSecurity } from "./checks/security";
 import { checkDomains } from "./checks/domains";
 import { searchSimilarDomains } from "./checks/similar-domains";
-import { checkText } from "./checks/text-check";
+import { checkText, TextIssue } from "./checks/text-check";
 import { analyzeQAResults } from "./ai/qa-analyzer";
+import { reviewTextIssues } from "./ai/text-reviewer";
 
 import {
   printQAReport,
@@ -646,7 +647,12 @@ results.push({
   // =======================================================
 
   // Sparar alla textfel från alla crawlade sidor.
-  const textIssues = [];
+  const textIssues: TextIssue[] = [];
+  // Sparar sidor där texten inte kunde hämtas.
+const failedTextPages: string[] = [];
+
+// Sparar sidor där LanguageTool-kontrollen misslyckades.
+const failedLanguageToolPages: string[] = [];
 
 
   // Räknar hur många sidor som faktiskt kontrolleras.
@@ -661,91 +667,65 @@ results.push({
     new Map<string, string>();
 
 
+
   // Går igenom alla sidor som crawlern hittade.
   for (
     let i = 0;
     i < pages.length;
     i++
   ) {
-
     const pageUrl = pages[i];
 
     console.log(
       `\nHämtar text ${i + 1}/${totalTextPages}: ${pageUrl}`
     );
 
-
     try {
-
       // Öppnar sidan som ska kontrolleras.
-      await page.goto(
-        pageUrl,
-        {
-          waitUntil: "domcontentloaded",
-          timeout: 30000,
-        }
-      );
+      await page.goto(pageUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      });
 
-
-      // ---------------------------------------------------
-      // TA BORT GOOGLE-RECENSIONER
-      // ---------------------------------------------------
-
-      // Google-recensioner ska inte räknas som webbplatsens
-      // egen text eftersom de är användargenererade.
+      // Tar bort Google-recensioner från textkontrollen.
       await page.evaluate(() => {
-
         const elements = Array.from(
           document.querySelectorAll("body *")
         );
 
         for (const element of elements) {
-
           const text =
             element.textContent?.trim() || "";
 
-
-          // Hittar början av Google-recensionswidgeten.
           if (
             text.includes("Publicerat på Google") &&
             text.length < 5000
           ) {
+            let parent = element.parentElement;
 
-            let parent =
-              element.parentElement;
-
-
-            // Letar efter ett större element som
-            // innehåller hela recension-widgeten.
             for (
               let i = 0;
               i < 6 && parent;
               i++
             ) {
-
               const parentText =
                 parent.textContent?.trim() || "";
-
 
               if (
                 parentText.includes("Publicerat på Google") &&
                 parentText.length < 10000
               ) {
-
                 parent.remove();
-
                 break;
               }
 
-
-              parent =
-                parent.parentElement;
+              parent = parent.parentElement;
             }
           }
         }
       });
 
-      // Tar bort element som inte ska ingå i textkontrollen.
+      // Tar bort element som inte ska textkontrolleras.
       const pageText = await page.evaluate(() => {
         const selectorsToRemove = [
           "script",
@@ -769,15 +749,10 @@ results.push({
         return document.body?.innerText ?? "";
       });
 
-      // Sparar texten från sidan för den fortsatta analysen.
+      // Sparar texten från sidan.
       pageTexts.set(pageUrl, pageText);
 
-      // ---------------------------------------------------
-      // PROGRESS
-      // ---------------------------------------------------
-
-      // Den första delen av textkontrollen använder
-      // området 54-55 %.
+      // Uppdaterar progress.
       const textProgress =
         54 +
         Math.round(
@@ -788,22 +763,16 @@ results.push({
         textProgress,
         `Hämtar text ${i + 1}/${totalTextPages}...`
       );
-
-
     } catch (error) {
-
-      // Ett problem med en enskild sida ska inte
-      // stoppa hela QA-skanningen.
+      // Ett fel på en sida ska inte stoppa hela skanningen.
       console.log(
         `⚠ Kunde inte hämta text på: ${pageUrl}`
       );
 
-      console.log(
-        error
-      );
+      console.log(error);
+      failedTextPages.push(pageUrl);
     }
   }
-
 
   // =======================================================
   // RÄKNA ÅTERKOMMANDE ORD
@@ -947,50 +916,93 @@ results.push({
       );
     }
   }
+ // -------------------------------------------------------
+// TEXTRESULTAT
+// -------------------------------------------------------
 
+// AI:n granskar LanguageTools träffar.
+const aiReviewedIssues = await reviewTextIssues(textIssues);
 
-  // -------------------------------------------------------
-  // TEXTRESULTAT
-  // -------------------------------------------------------
+// Formaterar ett textfynd för PDF-rapporten.
+const formatIssue = (
+issue: (typeof aiReviewedIssues)[number]
+): string => {
+let classification: string;
 
-  // Om minst ett textfel hittades blir resultatet WARNING.
-  if (
-    textIssues.length > 0
-  ) {
+if (issue.aiAssessment === "LIKELY_SPELLING") {
+classification = "AI bedömer texten som sannolikt stavfel";
+} else {
+classification = "Osäker träff – behöver granskas";
+}
 
-    results.push({
-      name: "Text / stavning",
-      status: "WARNING",
-      message:
-        `${textIssues.length} möjliga textfel hittades\n\n` +
+return (
+`- Klassificering: ${classification}\n` +
+`  Markerad text: "${issue.matchedText}"\n` +
+`  Förslag: ${
+      issue.suggestions.length > 0
+        ? issue.suggestions.join(", ")
+        : "Inga förslag från LanguageTool"
+    }\n` +
+`  Sida: ${issue.pageUrl}\n` +
+`  Sammanhang: ${issue.context}\n` +
+`  Förklaring från LanguageTool: ${issue.message}\n` +
+(
+issue.aiExplanation
+? `  AI-bedömning: ${issue.aiExplanation}\n`
+: ""
+) +
+`  LanguageTool-regel: ${issue.ruleId}\n` +
+`  Typ: ${issue.issueType}`
+);
+};
 
-        textIssues
-          .map(
-            (issue) =>
-              `- Felaktig text: "${issue.matchedText}"\n` +
-              `  Förslag: ${
-                issue.suggestions.length > 0
-                  ? issue.suggestions.join(", ")
-                  : "Inget förslag"
-              }\n` +
-              `  Sida: ${issue.pageUrl}\n` +
-              `  Sammanhang: ${issue.context}\n` +
-              `  Förklaring: ${issue.message}`
-          )
-          .join("\n\n"),
-    });
+// Ta endast med sannolika stavfel och osäkra träffar.
+// LIKELY_CORRECT ska inte visas i PDF-rapporten.
+const reportIssues = aiReviewedIssues.filter(
+(issue) => issue.aiAssessment !== "LIKELY_CORRECT"
+);
 
-  } else {
+const reportSpellingIssues = reportIssues.filter(
+(issue) => issue.aiAssessment === "LIKELY_SPELLING"
+);
 
-    // Om inga fel hittades blir resultatet PASS.
-    results.push({
-      name: "Text / stavning",
-      status: "PASS",
-      message:
-        "Inga stavnings- eller grammatikfel hittades",
-    });
-  }
+const reportUncertainIssues = reportIssues.filter(
+(issue) => issue.aiAssessment === "REVIEW"
+);
 
+const sections: string[] = [
+`Antal sannolika stavfel: ${reportSpellingIssues.length}`,
+`Antal osäkra träffar: ${reportUncertainIssues.length}`,
+];
+
+if (reportSpellingIssues.length > 0) {
+sections.push(
+"SANNOLIKA STAVFEL – AI-BEDÖMNING\n\n" +
+reportSpellingIssues.map(formatIssue).join("\n\n")
+);
+}
+
+if (reportUncertainIssues.length > 0) {
+sections.push(
+"OSÄKRA TRÄFFAR – MANUELL GRANSKNING\n\n" +
+reportUncertainIssues.map(formatIssue).join("\n\n")
+);
+}
+
+if (reportIssues.length > 0) {
+results.push({
+name: "Text / stavning",
+status: "WARNING",
+message: sections.join("\n\n"),
+});
+} else {
+results.push({
+name: "Text / stavning",
+status: "PASS",
+message:
+"AI-granskningen hittade inga sannolika stavfel eller osäkra träffar.",
+});
+}
 
   // =======================================================
   // 11. LÄNKAR
