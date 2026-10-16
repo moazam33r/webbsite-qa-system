@@ -155,6 +155,25 @@ test("Skyddsregeln behåller REVIEW när AI föreslår ett stavfel", () => {
     "kan inte ensam bekräfta"
   );
 });
+test("AI-bedömningen av ett korrekt fackord följer det simulerade svaret", async () => {
+  const result = await reviewTextIssues(
+    [
+      createIssue(
+        "sidupplevelse",
+        "LIKELY_SPELLING"
+      ),
+    ],
+    mockAI(
+      createAIResponse(
+        "LIKELY_CORRECT",
+        "Ordet är korrekt i sammanhanget."
+      )
+    )
+  );
+
+  expect(result[0].aiAssessment).toBe("LIKELY_CORRECT");
+});
+
 
 
 

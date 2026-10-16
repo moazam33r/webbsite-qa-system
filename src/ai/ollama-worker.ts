@@ -81,11 +81,11 @@ function checkOllamaModel(): Promise<void> {
         }
 
         try {
-          const data = JSON.parse(responseBody);
+          const data = JSON.parse(responseBody) as {
+            models?: Array<{ name?: string }>;
+          };
 
-          const installedModels: string[] = Array.isArray(
-            data.models
-          )
+          const installedModels = Array.isArray(data.models)
             ? data.models
                 .map((model: { name?: string }) => model.name)
                 .filter(
@@ -218,13 +218,29 @@ async function run(): Promise<void> {
             }
 
             try {
-              const data = JSON.parse(responseBody);
-              let answer = data.message?.content ?? "";
+  const data = JSON.parse(responseBody) as {
+    done_reason?: string;
+    message?: {
+      content?: string;
+    };
+  };
 
-              if (typeof answer !== "string" || !answer.trim()) {
-                reject(new Error("Ollama skickade ett tomt svar."));
-                return;
-              }
+  // Kontrollerar om Ollama avslutade svaret på grund av längdgränsen.
+  if (data.done_reason === "length") {
+    reject(
+      new Error(
+        "Ollama-svaret kapades eftersom genereringsgränsen nåddes."
+      )
+    );
+    return;
+  }
+
+  let answer = data.message?.content ?? "";
+
+  if (typeof answer !== "string" || !answer.trim()) {
+    reject(new Error("Ollama skickade ett tomt svar."));
+    return;
+  }
 
               
               answer = answer

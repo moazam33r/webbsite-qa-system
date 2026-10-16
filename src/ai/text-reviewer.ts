@@ -11,7 +11,6 @@ export interface ReviewedTextIssue extends TextIssue {
   aiExplanation: string;
 }
 
-// Gör det möjligt att testa AI-granskningen utan att starta Ollama.
 export type TextReviewFunction = (prompt: string) => Promise<string>;
 
 const DEFAULT_EXPLANATION =
@@ -23,13 +22,10 @@ const VALID_ASSESSMENTS: AITextAssessment[] = [
   "REVIEW",
 ];
 
-// Mindre batchar minskar risken att Ollama kapar JSON-svaret.
-const BATCH_SIZE = 4;
-
-// Försök igen om AI:n returnerar ett ofullständigt eller ogiltigt svar.
+const BATCH_SIZE = 1;
 const MAX_ATTEMPTS = 2;
 
-// AI:n får inte ensam uppgradera en osäker träff till ett bekräftat stavfel.
+// Skyddar osäkra fynd från att uppgraderas till bekräftade stavfel.
 export function applyAssessmentGuard(
   originalIssue: TextIssue,
   assessment: AITextAssessment,
@@ -71,8 +67,10 @@ interface ParsedAIResponse {
   results: ParsedAssessment[];
 }
 
-// Försöker läsa en fullständig JSON-struktur från AI-svaret.
-function parseAIResponse(response: string): ParsedAssessment[] | null {
+// Läser JSON och behåller endast bedömningar med rätt datatyper.
+function parseAIResponse(
+  response: string
+): ParsedAssessment[] | null {
   const cleaned = cleanAIResponse(response);
   const jsonStart = cleaned.indexOf("{");
   const jsonEnd = cleaned.lastIndexOf("}");
@@ -136,7 +134,7 @@ function parseAIResponse(response: string): ParsedAssessment[] | null {
   return validResults;
 }
 
-// Skapar en kortare prompt som minskar risken för kapade svar.
+// Skapar en prompt som betonar korrekt svenska och försiktiga bedömningar.
 function createPrompt(
   candidates: Array<{
     id: number;
@@ -152,37 +150,40 @@ function createPrompt(
   return `
 Du är en noggrann svensk korrekturläsare.
 
-Granska varje fynd separat utifrån ordet och sammanhanget.
+Bedöm varje fynd utifrån ordet, sammanhanget och förslagen.
+En markering från ett stavningsverktyg är inte ett bevis på stavfel.
 
-Välj en bedömning per id:
+Bedömningar:
 
 LIKELY_SPELLING:
-Tydliga belägg för ett verkligt stavfel.
+Använd endast när det finns tydliga belägg för ett verkligt stavfel.
 
 LIKELY_CORRECT:
-Ordet är korrekt i sammanhanget, exempelvis ett fackord,
-ett sammansatt ord, ett gatunamn eller en teknisk identifierare.
+Använd när ordet är korrekt svenska eller korrekt i sammanhanget.
 
 REVIEW:
-Det går inte att avgöra säkert.
+Använd när det inte går att avgöra säkert.
+VIKTIGA REGLER:
 
-REGLER:
-- LanguageTools markering bevisar inte att ordet är fel.
-- LanguageTools förslag kan vara felaktiga.
-- Svenska sammansättningar och fackord kan vara korrekta.
-- Gatunamn och andra egennamn ska inte ändras utan belägg.
-- WordPress-cookienamn och tekniska identifierare ska bedömas
-  som tekniska uttryck när sammanhanget visar det.
-- Om ordet passar i sammanhanget, välj LIKELY_CORRECT.
-- Om du är osäker, välj REVIEW.
-- Bedöm inte samma id mer än en gång.
+- Bedöm stavningen separat från om du förstår ordet eller meningen.
+- Ett ord kan vara begripligt men ändå felstavat. Kontrollera därför ordets faktiska stavning.
+- Använd LanguageTools förslag som ledtrådar, inte som bevis.
+- Om originalordet är ett etablerat svenskt ord och passar sammanhanget, välj LIKELY_CORRECT.
+- Svenska sammansättningar kan vara korrekta även om de är ovanliga.
+- Facktermer inom SEO, webb, marknadsföring och IT kan vara korrekta. Kontrollera ordets uppbyggnad och sammanhang innan du bedömer det.
+- Ord som indexerbarhet, sidupplevelse och söktermsanalys ska bedömas utifrån svensk språkbildning och sammanhang.
+- Egennamn, ortnamn, företagsnamn och produktnamn ska inte ändras utan tydliga belägg. Om namnet inte kan verifieras, välj REVIEW.
+- Engelska tekniska uttryck och identifierare kan vara korrekta i ett tekniskt sammanhang.
+- Kontrollera särskilt om ett föreslaget alternativ faktiskt passar sammanhanget. Välj inte ett alternativ enbart för att LanguageTool föreslår det.
+- Hitta inte på stavfel och hitta inte på fakta om ord eller namn.
+- Välj LIKELY_SPELLING endast när ordet har tydliga stavningsfel och förslaget passar sammanhanget.
+- Om stavningen verkar korrekt men du inte kan avgöra det säkert, välj REVIEW.
 - Om ursprungligBedomning är REVIEW får du inte välja LIKELY_SPELLING.
-- Hitta inte på information som saknas.
+- Returnera varje id exakt en gång.
+- Förklaringen ska vara kort, saklig och på korrekt svenska.
+- Förklaringen får innehålla högst 12 ord.
 
-Skriv en förklaring på svenska med högst 12 ord.
-
-Returnera ett resultat för varje id.
-Skriv ENDAST giltig JSON, utan markdown eller annan text.
+Returnera ENDAST giltig JSON utan markdown eller annan text.
 
 Format:
 {
@@ -190,7 +191,7 @@ Format:
     {
       "id": 0,
       "assessment": "LIKELY_CORRECT",
-      "explanation": "Ordet passar i sammanhanget."
+      "explanation": "Ordet är korrekt i sammanhanget."
     }
   ]
 }
@@ -200,8 +201,8 @@ ${JSON.stringify(candidates)}
 `;
 }
 
-// Granskar en batch och försöker igen om svaret är ogiltigt
-// eller saknar en eller flera förväntade bedömningar.
+// Kontrollerar att svaret innehåller exakt ett giltigt resultat
+// för varje förväntat id. Dubbletter godkänns inte.
 async function reviewBatch(
   prompt: string,
   reviewWithAI: TextReviewFunction,
@@ -213,10 +214,14 @@ async function reviewBatch(
       const retryPrompt = `
 ${prompt}
 
-VIKTIGT: Föregående svar var ogiltigt eller ofullständigt.
-Returnera exakt ett resultat för varje id i fynden.
-Alla id:n måste finnas med, utan dubbletter.
-Håll varje förklaring mycket kort.
+VIKTIGT:
+Det föregående svaret var ogiltigt eller ofullständigt.
+Returnera exakt ett resultat för varje id från 0 till ${
+        expectedCount - 1
+      }.
+Alla id:n måste finnas med exakt en gång.
+Använd endast tillåtna bedömningar.
+Håll förklaringarna korta.
 Skriv ingen text utanför JSON.
 `;
 
@@ -227,24 +232,35 @@ Skriv ingen text utanför JSON.
       const results = parseAIResponse(response);
 
       if (results !== null) {
-        const validIds = new Set(
-          results
-            .filter(
-              (item) =>
-                item.id >= 0 &&
-                item.id < expectedCount
-            )
-            .map((item) => item.id)
+        const ids = results.map((item) => item.id);
+        const uniqueIds = new Set(ids);
+
+        const allIdsInRange = ids.every(
+          (id) => id >= 0 && id < expectedCount
         );
 
-        if (validIds.size === expectedCount) {
+        const allExpectedIdsPresent =
+          uniqueIds.size === expectedCount &&
+          Array.from(
+            { length: expectedCount },
+            (_, index) => index
+          ).every((id) => uniqueIds.has(id));
+
+        const exactlyOnePerId =
+          results.length === expectedCount &&
+          uniqueIds.size === results.length;
+
+        if (
+          allIdsInRange &&
+          allExpectedIdsPresent &&
+          exactlyOnePerId
+        ) {
           return results;
         }
 
         console.warn(
-          `AI-batch ${batchNumber}: fick ${validIds.size} av ` +
-            `${expectedCount} förväntade bedömningar, ` +
-            `försök ${attempt}/${MAX_ATTEMPTS}.`
+          `AI-batch ${batchNumber}: ogiltiga eller dubblerade id:n. ` +
+            `Försök ${attempt}/${MAX_ATTEMPTS}.`
         );
       } else {
         console.warn(
@@ -274,7 +290,7 @@ export async function reviewTextIssues(
   issues: TextIssue[],
   reviewWithAI: TextReviewFunction = askOllama
 ): Promise<ReviewedTextIssue[]> {
-  // Alla fynd börjar säkert som REVIEW.
+  // Börja försiktigt: inga fynd bekräftas innan de har granskats.
   const reviewedIssues: ReviewedTextIssue[] = issues.map((issue) => ({
     ...issue,
     aiAssessment: "REVIEW",
@@ -356,4 +372,3 @@ export async function reviewTextIssues(
 
   return reviewedIssues;
 }
-

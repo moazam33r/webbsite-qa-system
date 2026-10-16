@@ -216,6 +216,56 @@ function extractUrls(text: string): string[] {
     );
 }
 
+interface ReportLink {
+    url: string;
+    label: string;
+}
+
+function getReportLinks(
+    result: QACheckResult
+): ReportLink[] {
+    const supportedCheck =
+        /sociala medier|google maps|google business profile/i.test(
+            result.name
+        );
+
+    if (!supportedCheck) {
+        return [];
+    }
+
+    const links: ReportLink[] = [];
+
+    for (const line of result.message.split(/\r?\n/)) {
+        const urls = extractUrls(line);
+
+        for (const url of urls) {
+            const prefix = line
+                .slice(0, line.indexOf(url))
+                .replace(/[:\s-]+$/, "")
+                .trim();
+
+            let label = prefix || "Öppna länk";
+
+            if (/matchande profil/i.test(label)) {
+                label = "Matchande profil";
+            } else if (/profil som inte matchar/i.test(label)) {
+                label = "Profil som inte matchar";
+            }
+
+            links.push({ url, label });
+        }
+    }
+
+    // Undvik att samma URL skrivs ut flera gånger.
+    return links.filter(
+        (link, index, allLinks) =>
+            allLinks.findIndex(
+                (item) => item.url === link.url
+            ) === index
+    );
+}
+
+
 // ============================================================
 // ANTAL TESTADE SIDOR
 // ============================================================
@@ -1556,81 +1606,194 @@ function addWhatWorks(
     document.font("Helvetica");
 }
 
-// ============================================================
-// TEKNISK BILAGA
-// ============================================================
 
-function addResultCard(
-    document: PDFKit.PDFDocument,
-    result: QACheckResult,
-    continuationTitle = "Teknisk bilaga"
-): void {
-    const message = shortenText(result.message, 2000);
-    const textX = 125;
-    const textWidth = document.page.width - 190;
+ // ============================================================
+ // TEKNISK BILAGA
+ // ============================================================
 
-    const messageHeight = message
-        ? measure(document, message, textWidth, "Helvetica", 8.5)
-        : 0;
+ function addResultCard(
+     document: PDFKit.PDFDocument,
+     result: QACheckResult,
+     continuationTitle = "Teknisk bilaga"
+ ): void {
+     const textX = 125;
+     const textWidth = document.page.width - 190;
 
-    const cardHeight = Math.max(48, 30 + messageHeight + 12);
+     const supportsLinks =
+         /sociala medier|google maps|google business profile/i.test(
+             result.name
+         );
 
-    ensureSpace(document, cardHeight + 8, continuationTitle);
+     // Extrahera länkar bara från de tre relevanta kontrollerna.
+     const links = getReportLinks(result);
 
-    const startY = document.y;
+     // Visa inte samma URL både som vanlig text och som klickbar länk.
+     const messageLines = result.message
+         .split(/\r?\n/)
+         .filter(
+             (line) =>
+                 !supportsLinks || extractUrls(line).length === 0
+         )
+         .map((line) => line.trim())
+         .filter(Boolean);
 
-    document
-        .roundedRect(PAGE.margin, startY, PAGE.contentWidth, cardHeight, 7)
-        .fill(getStatusBackground(result.status));
+     const message = shortenText(
+         messageLines.map((line) => cleanMessage(line)).join(" "),
+         2000
+     );
 
-    document
-        .fillColor(getStatusColor(result.status))
-        .font("Helvetica-Bold")
-        .fontSize(8)
-        .text(result.status, 65, startY + 10, {
-            width: 52,
-        });
+     const messageHeight = message
+         ? measure(
+               document,
+               message,
+               textWidth,
+               "Helvetica",
+               8.5
+           )
+         : 0;
 
-    document
-        .fillColor(COLORS.text)
-        .font("Helvetica-Bold")
-        .fontSize(10)
-        .text(result.name, textX, startY + 8, {
-            width: textWidth,
-        });
+     // Beräkna utrymmet som rubriken och länkarna behöver.
+     let linksHeight = 0;
 
-    if (message) {
-        document
-            .fillColor(COLORS.muted)
-            .font("Helvetica")
-            .fontSize(8.5)
-            .text(message, textX, startY + 25, {
-                width: textWidth,
-                lineGap: 2,
-            });
-    }
+     if (links.length > 0) {
+         linksHeight += 16;
 
-    document.y = startY + cardHeight + 8;
-}
+         for (const link of links) {
+             const labelHeight = measure(
+                 document,
+                 link.label,
+                 textWidth,
+                 "Helvetica",
+                 8
+             );
 
-function addTechnicalAppendix(
-    document: PDFKit.PDFDocument,
-    results: QACheckResult[]
-): void {
-    startNewPage(document, "Teknisk bilaga");
+             const urlHeight = measure(
+                 document,
+                 link.url,
+                 textWidth,
+                 "Helvetica",
+                 8.5
+             );
 
-    addSectionTitle(
-        document,
-        "Teknisk bilaga",
-        `${results.length} automatiserade kontroller med originalresultat.`
-    );
+             linksHeight += labelHeight + urlHeight + 8;
+         }
+     }
 
-    for (const result of results) {
-        addResultCard(document, result);
-    }
+     const cardHeight = Math.max(
+         48,
+         38 + messageHeight + linksHeight
+     );
 
-    document.font("Helvetica");
-}
+     ensureSpace(
+         document,
+         cardHeight + 8,
+         continuationTitle
+     );
+
+     const startY = document.y;
+
+     document
+         .roundedRect(
+             PAGE.margin,
+             startY,
+             PAGE.contentWidth,
+             cardHeight,
+             7
+         )
+         .fill(getStatusBackground(result.status));
+
+     document
+         .fillColor(getStatusColor(result.status))
+         .font("Helvetica-Bold")
+         .fontSize(8)
+         .text(result.status, 65, startY + 10, {
+             width: 52,
+         });
+
+     document
+         .fillColor(COLORS.text)
+         .font("Helvetica-Bold")
+         .fontSize(10)
+         .text(result.name, textX, startY + 8, {
+             width: textWidth,
+         });
+
+     let y = startY + 25;
+
+     if (message) {
+         document
+             .fillColor(COLORS.muted)
+             .font("Helvetica")
+             .fontSize(8.5)
+             .text(message, textX, y, {
+                 width: textWidth,
+                 lineGap: 2,
+             });
+
+         y = document.y + 5;
+     }
+
+     if (links.length > 0) {
+         document
+             .fillColor(COLORS.text)
+             .font("Helvetica-Bold")
+             .fontSize(8.5)
+             .text("Hittade länkar", textX, y, {
+                 width: textWidth,
+             });
+
+         y = document.y + 4;
+
+         for (const link of links) {
+             document
+                 .fillColor(COLORS.secondaryText)
+                 .font("Helvetica")
+                 .fontSize(8)
+                 .text(link.label, textX, y, {
+                     width: textWidth,
+                 });
+
+             y = document.y + 2;
+
+             // PDFKit skapar en klickbar länk till URL:en.
+             document
+                 .fillColor("#0e7490")
+                 .font("Helvetica")
+                 .fontSize(8.5)
+                 .text(link.url, textX, y, {
+                     width: textWidth,
+                     link: link.url,
+                     underline: true,
+                     lineGap: 2,
+                 });
+
+             y = document.y + 5;
+         }
+     }
+
+     document.y = startY + cardHeight + 8;
+     document.font("Helvetica");
+ }
+
+ function addTechnicalAppendix(
+     document: PDFKit.PDFDocument,
+     results: QACheckResult[]
+ ): void {
+     startNewPage(document, "Teknisk bilaga");
+
+     addSectionTitle(
+         document,
+         "Teknisk bilaga",
+         `${results.length} automatiserade kontroller med originalresultat.`
+     );
+
+     for (const result of results) {
+         addResultCard(document, result);
+     }
+
+     document.font("Helvetica");
+ }
+
 
 // ============================================================
 // AI-ANALYS

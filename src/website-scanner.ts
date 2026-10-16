@@ -641,39 +641,17 @@ results.push({
     "Kontrollerar text och stavning..."
   );
 
-
   // =======================================================
   // HÄMTA TEXT FRÅN ALLA SIDOR
   // =======================================================
 
-  // Sparar alla textfel från alla crawlade sidor.
   const textIssues: TextIssue[] = [];
-  // Sparar sidor där texten inte kunde hämtas.
-const failedTextPages: string[] = [];
-
-// Sparar sidor där LanguageTool-kontrollen misslyckades.
-const failedLanguageToolPages: string[] = [];
-
-
-  // Räknar hur många sidor som faktiskt kontrolleras.
+  const failedTextPages: string[] = [];
+  const failedLanguageToolPages: string[] = [];
   const totalTextPages = pages.length;
+  const pageTexts = new Map<string, string>();
 
-
-  // Sparar den hämtade texten från varje sida.
-  //
-  // Vi behöver texten först för att kunna
-  // analysera hela webbplatsen tillsammans.
-  const pageTexts =
-    new Map<string, string>();
-
-
-
-  // Går igenom alla sidor som crawlern hittade.
-  for (
-    let i = 0;
-    i < pages.length;
-    i++
-  ) {
+  for (let i = 0; i < pages.length; i++) {
     const pageUrl = pages[i];
 
     console.log(
@@ -681,94 +659,150 @@ const failedLanguageToolPages: string[] = [];
     );
 
     try {
-      // Öppnar sidan som ska kontrolleras.
       await page.goto(pageUrl, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
       });
 
-      // Tar bort Google-recensioner från textkontrollen.
-      await page.evaluate(() => {
-        const elements = Array.from(
-          document.querySelectorAll("body *")
-        );
-
-        for (const element of elements) {
-          const text =
-            element.textContent?.trim() || "";
-
-          if (
-            text.includes("Publicerat på Google") &&
-            text.length < 5000
-          ) {
-            let parent = element.parentElement;
-
-            for (
-              let i = 0;
-              i < 6 && parent;
-              i++
-            ) {
-              const parentText =
-                parent.textContent?.trim() || "";
-
-              if (
-                parentText.includes("Publicerat på Google") &&
-                parentText.length < 10000
-              ) {
-                parent.remove();
-                break;
-              }
-
-              parent = parent.parentElement;
-            }
-          }
-        }
-      });
-
-      // Tar bort element som inte ska textkontrolleras.
       const pageText = await page.evaluate(() => {
+        // Ta bort innehåll som normalt inte är sidans brödtext.
         const selectorsToRemove = [
-          "script",
-          "style",
-          "noscript",
-          "nav",
-          "header",
-          "footer",
-          '[role="navigation"]',
-          '[aria-label*="cookie" i]',
-          '[id*="cookie" i]',
-          '[class*="cookie" i]',
-          '[id*="review" i]',
-          '[class*="review" i]',
-        ];
+  "script",
+  "style",
+  "noscript",
+  "nav",
+  "header",
+  "footer",
+  "aside",
+  "template",
+
+  // Navigations- och sidoinnehåll som inte ska stavningskontrolleras.
+  '[role="navigation"]',
+  '[role="banner"]',
+  '[role="contentinfo"]',
+
+  // Formulärens val och listor.
+  "select",
+  "option",
+  '[role="listbox"]',
+  '[role="option"]',
+
+  // Telefonfältens landsväljare.
+  ".iti__country-container",
+  ".iti__country-list",
+  ".iti__country",
+  ".iti__selected-country",
+  ".iti__dropdown-content",
+  '[class*="country-list" i]',
+  '[class*="country-dropdown" i]',
+  '[class*="country-selector" i]',
+
+  // Cookie- och recensionswidgetar.
+  '[aria-label*="cookie" i]',
+  '[id*="cookie" i]',
+  '[class*="cookie" i]',
+  '[id*="review" i]',
+  '[class*="review" i]',
+];
 
         document
           .querySelectorAll(selectorsToRemove.join(","))
           .forEach((element) => element.remove());
 
-        return document.body?.innerText ?? "";
+        // Hämta text från huvudområdet om det finns.
+       
+const mainElement = document.querySelector(
+  "main, [role='main'], article"
+);
+
+const main: HTMLElement | null =
+  mainElement instanceof HTMLElement
+    ? mainElement
+    : document.body;
+
+
+        if (!main) {
+          return "";
+        }
+
+        // Samla text från blockelement i dokumentordning.
+        // Ta bort upprepade, direkt intilliggande textblock,
+        // men behåll upprepningar som kan vara avsiktliga
+        // i olika delar av sidans innehåll.
+        const blockSelectors = [
+          "h1",
+          "h2",
+          "h3",
+          "h4",
+          "p",
+          "li",
+          "label",
+          "button",
+          "blockquote",
+          "figcaption",
+          "td",
+          "th",
+        ];
+
+        const blocks = Array.from(
+          main.querySelectorAll(blockSelectors.join(","))
+        );
+
+        const output: string[] = [];
+        let previousNormalized = "";
+
+        for (const block of blocks) {
+          if (
+            block.closest(
+              "nav, header, footer, aside, script, style, noscript"
+            )
+          ) {
+            continue;
+          }
+
+          const text = (block as HTMLElement).innerText
+            ?.replace(/\s+/g, " ")
+            .trim();
+
+          if (!text || text.length < 3) {
+            continue;
+          }
+
+          const normalized = text.toLocaleLowerCase("sv");
+
+          // Undvik endast direkt upprepade textblock.
+          if (normalized === previousNormalized) {
+            continue;
+          }
+
+          output.push(text);
+          previousNormalized = normalized;
+        }
+
+        // Sidor utan vanliga blockelement ska ändå kontrolleras.
+        if (output.length === 0) {
+          return main.innerText
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+
+        return output.join("\n");
       });
 
-      // Sparar texten från sidan.
       pageTexts.set(pageUrl, pageText);
 
-      // Uppdaterar progress.
       const textProgress =
         54 +
-        Math.round(
-          ((i + 1) / totalTextPages) * 1
-        );
+        Math.round(((i + 1) / Math.max(totalTextPages, 1)) * 1);
 
       reportProgress(
         textProgress,
         `Hämtar text ${i + 1}/${totalTextPages}...`
       );
     } catch (error) {
-      // Ett fel på en sida ska inte stoppa hela skanningen.
       console.log(
         `⚠ Kunde inte hämta text på: ${pageUrl}`
       );
-
       console.log(error);
       failedTextPages.push(pageUrl);
     }
@@ -778,232 +812,217 @@ const failedLanguageToolPages: string[] = [];
   // RÄKNA ÅTERKOMMANDE ORD
   // =======================================================
 
-  // Räknar hur många olika sidor varje ord
-  // förekommer på.
-  //
-  // Vi räknar sidor och inte antal förekomster
-  // på samma sida. Det gör kontrollen mer stabil.
-  const siteWordFrequency =
-    new Map<string, number>();
+  const siteWordFrequency = new Map<string, number>();
 
-
-  for (
-    const pageText
-    of pageTexts.values()
-  ) {
-
-    // Hämtar ord från sidan.
-    //
-    // Svenska bokstäver inkluderas så att exempelvis
-    // branschord med å, ä och ö behandlas korrekt.
+  for (const pageText of pageTexts.values()) {
     const words =
-      pageText
-        .toLowerCase()
-        .match(/[a-zåäöéü]+/gi) || [];
+      pageText.toLocaleLowerCase("sv").match(/[a-zåäöéü]+/gi) ?? [];
 
-
-    // Ett ord räknas endast en gång per sida.
-    const uniqueWords =
-      new Set(words);
-
-
-    for (const word of uniqueWords) {
-
-      // Ignorerar mycket korta ord.
-      if (
-        word.length < 5
-      ) {
+    for (const word of new Set(words)) {
+      if (word.length < 5) {
         continue;
       }
 
-
-      const currentCount =
-        siteWordFrequency.get(word) || 0;
-
-
       siteWordFrequency.set(
         word,
-        currentCount + 1
+        (siteWordFrequency.get(word) ?? 0) + 1
       );
     }
   }
 
-
-  // Visar några grundläggande uppgifter
-  // om frekvenskontrollen i terminalen.
   console.log(
     `\n✓ ${siteWordFrequency.size} unika ord analyserades på webbplatsen`
   );
-
 
   // =======================================================
   // LANGUAGE TOOL
   // =======================================================
 
-  // Nu när vi vet vilka ord som återkommer
-  // på webbplatsen kan vi köra LanguageTool.
-  for (
-    let i = 0;
-    i < pages.length;
-    i++
-  ) {
-
+  for (let i = 0; i < pages.length; i++) {
     const pageUrl = pages[i];
+    const pageText = pageTexts.get(pageUrl);
 
-
-    // Hämtar tidigare sparad text.
-    const pageText =
-      pageTexts.get(pageUrl) || "";
-
+    if (pageText === undefined) {
+      continue;
+    }
 
     console.log(
       `\nAnalyserar text ${i + 1}/${totalTextPages}: ${pageUrl}`
     );
 
-
     try {
-
-      // Skickar texten till LanguageTool.
-      //
-      // Vi skickar även med:
-      // - URL
-      // - frekvensdata från hela webbplatsen
-      const textCheckResult =
-        await checkText(
-          pageText,
-          "sv",
-          pageUrl,
-          siteWordFrequency
-        );
-
-
-      // Lägger till alla hittade fel i den
-      // gemensamma listan.
-      textIssues.push(
-        ...textCheckResult.issues
+      const textCheckResult = await checkText(
+        pageText,
+        "sv",
+        pageUrl,
+        siteWordFrequency
       );
 
+      textIssues.push(...textCheckResult.issues);
 
-      // ---------------------------------------------------
-      // PROGRESS
-      // ---------------------------------------------------
+      if (!textCheckResult.completed) {
+        failedLanguageToolPages.push(pageUrl);
 
-      // Den andra delen av textkontrollen använder
-      // området 55-56 %.
+        console.warn(
+          `LanguageTool kunde inte kontrollera sidan fullt ut: ${pageUrl}` +
+            (textCheckResult.failureReason
+              ? ` Orsak: ${textCheckResult.failureReason}`
+              : "")
+        );
+      }
+
       const textProgress =
         55 +
-        Math.round(
-          ((i + 1) / totalTextPages) * 1
-        );
-
+        Math.round(((i + 1) / Math.max(totalTextPages, 1)) * 1);
 
       reportProgress(
         textProgress,
         `Analyserar text ${i + 1}/${totalTextPages}...`
       );
-
-
     } catch (error) {
-
-      // Ett problem med en enskild sida ska inte
-      // stoppa hela QA-skanningen.
       console.log(
         `⚠ Kunde inte analysera text på: ${pageUrl}`
       );
-
-      console.log(
-        error
-      );
+      console.log(error);
+      failedLanguageToolPages.push(pageUrl);
     }
   }
- // -------------------------------------------------------
-// TEXTRESULTAT
-// -------------------------------------------------------
 
-// AI:n granskar LanguageTools träffar.
-const aiReviewedIssues = await reviewTextIssues(textIssues);
+  // =======================================================
+  // AI-GRANSKNING OCH TEXTRESULTAT
+  // =======================================================
 
-// Formaterar ett textfynd för PDF-rapporten.
-const formatIssue = (
-issue: (typeof aiReviewedIssues)[number]
-): string => {
-let classification: string;
+  const aiReviewedIssues = await reviewTextIssues(textIssues);
 
-if (issue.aiAssessment === "LIKELY_SPELLING") {
-classification = "AI bedömer texten som sannolikt stavfel";
-} else {
-classification = "Osäker träff – behöver granskas";
-}
+  console.log("\n--- FELSÖKNING TEXTKONTROLL ---");
+  console.log(`LanguageTool-träffar: ${textIssues.length}`);
+  console.log(`AI-granskade träffar: ${aiReviewedIssues.length}`);
 
-return (
-`- Klassificering: ${classification}\n` +
-`  Markerad text: "${issue.matchedText}"\n` +
-`  Förslag: ${
-      issue.suggestions.length > 0
-        ? issue.suggestions.join(", ")
-        : "Inga förslag från LanguageTool"
-    }\n` +
-`  Sida: ${issue.pageUrl}\n` +
-`  Sammanhang: ${issue.context}\n` +
-`  Förklaring från LanguageTool: ${issue.message}\n` +
-(
-issue.aiExplanation
-? `  AI-bedömning: ${issue.aiExplanation}\n`
-: ""
-) +
-`  LanguageTool-regel: ${issue.ruleId}\n` +
-`  Typ: ${issue.issueType}`
-);
-};
+  console.log(
+    "AI bedömer som stavfel:",
+    aiReviewedIssues.filter(
+      (issue) => issue.aiAssessment === "LIKELY_SPELLING"
+    ).length
+  );
 
-// Ta endast med sannolika stavfel och osäkra träffar.
-// LIKELY_CORRECT ska inte visas i PDF-rapporten.
-const reportIssues = aiReviewedIssues.filter(
-(issue) => issue.aiAssessment !== "LIKELY_CORRECT"
-);
+  console.log(
+    "AI bedömer som korrekta:",
+    aiReviewedIssues.filter(
+      (issue) => issue.aiAssessment === "LIKELY_CORRECT"
+    ).length
+  );
 
-const reportSpellingIssues = reportIssues.filter(
-(issue) => issue.aiAssessment === "LIKELY_SPELLING"
-);
+  console.log(
+    "AI lämnar osäkra:",
+    aiReviewedIssues.filter(
+      (issue) => issue.aiAssessment === "REVIEW"
+    ).length
+  );
 
-const reportUncertainIssues = reportIssues.filter(
-(issue) => issue.aiAssessment === "REVIEW"
-);
+  console.table(
+    aiReviewedIssues.map((issue) => ({
+      text: issue.matchedText,
+      LanguageTool: issue.classification,
+      Ollama: issue.aiAssessment,
+      förklaring: issue.aiExplanation,
+      sida: issue.pageUrl,
+    }))
+  );
 
-const sections: string[] = [
-`Antal sannolika stavfel: ${reportSpellingIssues.length}`,
-`Antal osäkra träffar: ${reportUncertainIssues.length}`,
-];
+  console.log("--- SLUT FELSÖKNING ---\n");
 
-if (reportSpellingIssues.length > 0) {
-sections.push(
-"SANNOLIKA STAVFEL – AI-BEDÖMNING\n\n" +
-reportSpellingIssues.map(formatIssue).join("\n\n")
-);
-}
+  const formatIssue = (
+    issue: (typeof aiReviewedIssues)[number]
+  ): string => {
+    const classification =
+      issue.aiAssessment === "LIKELY_SPELLING"
+        ? "AI bedömer texten som sannolikt stavfel"
+        : "Osäker träff – behöver granskas";
 
-if (reportUncertainIssues.length > 0) {
-sections.push(
-"OSÄKRA TRÄFFAR – MANUELL GRANSKNING\n\n" +
-reportUncertainIssues.map(formatIssue).join("\n\n")
-);
-}
+    return (
+      `- Klassificering: ${classification}\n` +
+      `  Markerad text: "${issue.matchedText}"\n` +
+      `  Förslag: ${
+        issue.suggestions.length > 0
+          ? issue.suggestions.join(", ")
+          : "Inga förslag från LanguageTool"
+      }\n` +
+      `  Sida: ${issue.pageUrl}\n` +
+      `  Sammanhang: ${issue.context}\n` +
+      `  Förklaring från LanguageTool: ${issue.message}\n` +
+      (issue.aiExplanation
+        ? `  AI-bedömning: ${issue.aiExplanation}\n`
+        : "") +
+      `  LanguageTool-regel: ${issue.ruleId}\n` +
+      `  Typ: ${issue.issueType}`
+    );
+  };
 
-if (reportIssues.length > 0) {
-results.push({
-name: "Text / stavning",
-status: "WARNING",
-message: sections.join("\n\n"),
-});
-} else {
-results.push({
-name: "Text / stavning",
-status: "PASS",
-message:
-"AI-granskningen hittade inga sannolika stavfel eller osäkra träffar.",
-});
-}
+  const reportIssues = aiReviewedIssues.filter(
+    (issue) => issue.aiAssessment !== "LIKELY_CORRECT"
+  );
 
+  const reportSpellingIssues = reportIssues.filter(
+    (issue) => issue.aiAssessment === "LIKELY_SPELLING"
+  );
+
+  const reportUncertainIssues = reportIssues.filter(
+    (issue) => issue.aiAssessment === "REVIEW"
+  );
+
+  const sections: string[] = [
+    `Antal sannolika stavfel: ${reportSpellingIssues.length}`,
+    `Antal osäkra träffar: ${reportUncertainIssues.length}`,
+  ];
+
+  if (reportSpellingIssues.length > 0) {
+    sections.push(
+      "SANNOLIKA STAVFEL – AI-BEDÖMNING\n\n" +
+        reportSpellingIssues.map(formatIssue).join("\n\n")
+    );
+  }
+
+  if (reportUncertainIssues.length > 0) {
+    sections.push(
+      "OSÄKRA TRÄFFAR – MANUELL GRANSKNING\n\n" +
+        reportUncertainIssues.map(formatIssue).join("\n\n")
+    );
+  }
+
+  const textCheckFailed =
+    failedTextPages.length > 0 ||
+    failedLanguageToolPages.length > 0;
+
+  if (failedTextPages.length > 0) {
+    sections.push(
+      "SIDOR DÄR TEXTEN INTE KUNDE HÄMTAS\n\n" +
+        failedTextPages.map((pageUrl) => `- ${pageUrl}`).join("\n")
+    );
+  }
+
+  if (failedLanguageToolPages.length > 0) {
+    sections.push(
+      "SIDOR DÄR TEXTKONTROLLEN INTE KUNDE GENOMFÖRAS\n\n" +
+        [...new Set(failedLanguageToolPages)]
+          .map((pageUrl) => `- ${pageUrl}`)
+          .join("\n")
+    );
+  }
+
+  if (reportIssues.length > 0 || textCheckFailed) {
+    results.push({
+      name: "Text / stavning",
+      status: "WARNING",
+      message: sections.join("\n\n"),
+    });
+  } else {
+    results.push({
+      name: "Text / stavning",
+      status: "PASS",
+      message:
+        "Textkontrollen genomfördes utan sannolika stavfel eller osäkra träffar.",
+    });
+  }
   // =======================================================
   // 11. LÄNKAR
   // =======================================================
@@ -1521,6 +1540,7 @@ message:
   }
 
 
+ 
   // =======================================================
   // 17. SOCIALA MEDIER
   // =======================================================
@@ -1539,24 +1559,33 @@ message:
       url
     );
 
-  if (socialMediaResult.failed.length > 0) {
+  // Samla länkar från matchande och icke matchande profiler.
+  const socialMediaLinks = [
+    ...socialMediaResult.found.map((item) => ({
+      url: item.url,
+      match: true,
+    })),
+    ...socialMediaResult.failed.map((item) => ({
+      url: item.url,
+      match: false,
+    })),
+  ].filter((item) => item.url);
 
-    results.push({
-      name: "Sociala medier",
-      status: "FAIL",
-      message:
-        `${socialMediaResult.failed.length} sociala medier verkar inte tillhöra företaget`,
-    });
-
-  } else {
-
-    results.push({
-      name: "Sociala medier",
-      status: "PASS",
-      message:
-        `${socialMediaResult.found.length} sociala medier hittades och matchar webbplatsen`,
-    });
-  }
+  results.push({
+    name: "Sociala medier",
+    status:
+      socialMediaResult.failed.length > 0
+        ? "FAIL"
+        : "PASS",
+    message: [
+      `${socialMediaResult.found.length} sociala medier matchar webbplatsen`,
+      `${socialMediaResult.failed.length} sociala medier matchar inte företaget`,
+      ...socialMediaLinks.map(
+        (item) =>
+          `${item.match ? "Matchande profil" : "Profil som inte matchar"}: ${item.url}`
+      ),
+    ].join("\n"),
+  });
 
 
   // =======================================================
@@ -1576,24 +1605,30 @@ message:
       pages
     );
 
-  if (googleMapsResult.found.length > 0) {
+  // Ta endast med faktiska, icke-tomma URL:er.
+  const googleMapsLinks = [
+    ...new Set(
+      googleMapsResult.found.filter(
+        (item) =>
+          typeof item === "string" &&
+          item.trim().length > 0
+      )
+    ),
+  ];
 
-    results.push({
-      name: "Google Maps",
-      status: "PASS",
-      message:
-        `${googleMapsResult.found.length} Google Maps-förekomster hittades`,
-    });
-
-  } else {
-
-    results.push({
-      name: "Google Maps",
-      status: "WARNING",
-      message:
-        "Ingen Google Maps-förekomst hittades",
-    });
-  }
+  results.push({
+    name: "Google Maps",
+    status:
+      googleMapsLinks.length > 0
+        ? "PASS"
+        : "WARNING",
+    message: [
+      googleMapsLinks.length > 0
+        ? `${googleMapsLinks.length} Google Maps-länkar hittades`
+        : "Ingen Google Maps-förekomst hittades",
+      ...googleMapsLinks,
+    ].join("\n"),
+  });
 
 
   // =======================================================
@@ -1613,41 +1648,46 @@ message:
       pages
     );
 
+  // Samla hittade profiler och matchningar via Google Maps.
+  const businessProfileLinks = [
+    ...googleBusinessProfileResult.found,
+    ...googleBusinessProfileResult.mapsMatches.map(
+      (item) => item.url
+    ),
+  ].filter(
+    (item) =>
+      typeof item === "string" &&
+      item.trim().length > 0
+  );
+
+  const uniqueBusinessProfileLinks = [
+    ...new Set(businessProfileLinks),
+  ];
+
   if (
     googleBusinessProfileResult.failed.length > 0
   ) {
-
     results.push({
       name: "Google Business Profile",
       status: "FAIL",
-      message:
+      message: [
         `${googleBusinessProfileResult.failed.length} Google-profiler kunde inte bekräftas`,
+        ...googleBusinessProfileResult.failed,
+        ...uniqueBusinessProfileLinks,
+      ].join("\n"),
     });
-
   } else if (
-    googleBusinessProfileResult.found.length > 0
+    uniqueBusinessProfileLinks.length > 0
   ) {
-
     results.push({
       name: "Google Business Profile",
       status: "PASS",
-      message:
-        `${googleBusinessProfileResult.found.length} Google-profiler hittades och matchar företaget`,
+      message: [
+        `${uniqueBusinessProfileLinks.length} Google Business Profile- eller Maps-länkar hittades`,
+        ...uniqueBusinessProfileLinks,
+      ].join("\n"),
     });
-
-  } else if (
-    googleBusinessProfileResult.mapsMatches.length > 0
-  ) {
-
-    results.push({
-      name: "Google Business Profile",
-      status: "PASS",
-      message:
-        "Google Business Profile matchar företaget via Google Maps",
-    });
-
   } else {
-
     results.push({
       name: "Google Business Profile",
       status: "WARNING",
