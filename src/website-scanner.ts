@@ -1351,6 +1351,21 @@ const main: HTMLElement | null =
   }
 
 
+  // Lägger till en notering om externa länkar som inte kunde
+  // kontrolleras automatiskt (t.ex. Facebook, som blockerar
+  // automatiska förfrågningar). Dessa räknas inte som trasiga.
+  if (linkResult.externalSkipped > 0) {
+
+    const linksEntry = results[results.length - 1];
+
+    linksEntry.message +=
+      `\n\nObs: ${linkResult.externalSkipped} externa länkar ` +
+      `(t.ex. sociala medier) kunde inte kontrolleras automatiskt ` +
+      `eftersom de blockerar automatiska förfrågningar. ` +
+      `De räknas inte som trasiga.`;
+  }
+
+
   // =======================================================
   // 12. BILDER
   // =======================================================
@@ -1563,15 +1578,20 @@ const main: HTMLElement | null =
       url
     );
 
-  // Samla länkar från matchande och icke matchande profiler.
+  // Samla länkar från matchande, icke matchande och
+  // overifierade profiler.
   const socialMediaLinks = [
     ...socialMediaResult.found.map((item) => ({
       url: item.url,
-      match: true,
+      label: "Matchande profil",
     })),
     ...socialMediaResult.failed.map((item) => ({
       url: item.url,
-      match: false,
+      label: "Profil som inte matchar",
+    })),
+    ...socialMediaResult.unverified.map((item) => ({
+      url: item.url,
+      label: "Profil som inte kunde verifieras automatiskt",
     })),
   ].filter((item) => item.url);
 
@@ -1580,13 +1600,19 @@ const main: HTMLElement | null =
     status:
       socialMediaResult.failed.length > 0
         ? "FAIL"
-        : "PASS",
+        : socialMediaResult.unverified.length > 0
+          ? "WARNING"
+          : "PASS",
     message: [
       `${socialMediaResult.found.length} sociala medier matchar webbplatsen`,
       `${socialMediaResult.failed.length} sociala medier matchar inte företaget`,
+      ...(socialMediaResult.unverified.length > 0
+        ? [
+            `${socialMediaResult.unverified.length} sociala medier kunde inte verifieras automatiskt`,
+          ]
+        : []),
       ...socialMediaLinks.map(
-        (item) =>
-          `${item.match ? "Matchande profil" : "Profil som inte matchar"}: ${item.url}`
+        (item) => `${item.label}: ${item.url}`
       ),
     ].join("\n"),
   });
@@ -1676,7 +1702,10 @@ const main: HTMLElement | null =
       status: "FAIL",
       message: [
         `${googleBusinessProfileResult.failed.length} Google-profiler kunde inte bekräftas`,
-        ...googleBusinessProfileResult.failed,
+        ...googleBusinessProfileResult.failed.map(
+          (item) =>
+            `Profil som inte kunde bekräftas: ${item.url}`
+        ),
         ...uniqueBusinessProfileLinks,
       ].join("\n"),
     });

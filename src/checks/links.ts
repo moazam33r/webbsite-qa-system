@@ -46,6 +46,11 @@ export interface LinkCheckResult {
   externalPassed: number;
   externalFailed: number;
 
+  // Externa länkar som inte kunde kontrolleras automatiskt
+  // eftersom webbplatsen blockerar automatiska förfrågningar
+  // (t.ex. Facebook som svarar 400 på alla robotanrop).
+  externalSkipped: number;
+
   linkFailures: LinkFailure[];
 
   phoneLinks: PhoneLinkResult[];
@@ -297,6 +302,7 @@ export async function checkLinks(
 
   let externalPassed = 0;
   let externalFailed = 0;
+  let externalSkipped = 0;
 
   const linkFailures: LinkFailure[] = [];
   const phoneLinks: PhoneLinkResult[] = [];
@@ -308,6 +314,47 @@ export async function checkLinks(
   /**
    * Kontrollerar om en URL är intern.
    */
+  // Sociala medier och liknande tjänster blockerar ofta automatiska
+  // förfrågningar och svarar med t.ex. 400, 403 eller 999 även när
+  // länken fungerar i en vanlig webbläsare. Statuskoden säger då
+  // ingenting om länken är trasig, så den räknas inte som fel.
+  const BOT_BLOCKING_DOMAINS = [
+    "facebook.com",
+    "fb.com",
+    "instagram.com",
+    "linkedin.com",
+    "twitter.com",
+    "x.com",
+    "tiktok.com",
+  ];
+
+  const BOT_BLOCKING_STATUSES = [400, 401, 403, 405, 429, 999];
+
+  function isBotBlockedResponse(
+    linkUrl: string,
+    status: number
+  ): boolean {
+
+    if (!BOT_BLOCKING_STATUSES.includes(status)) {
+      return false;
+    }
+
+    try {
+
+      const hostname = new URL(linkUrl).hostname.toLowerCase();
+
+      return BOT_BLOCKING_DOMAINS.some(
+        (domain) =>
+          hostname === domain ||
+          hostname.endsWith(`.${domain}`)
+      );
+
+    } catch {
+
+      return false;
+    }
+  }
+
   function isInternalLink(linkUrl: string): boolean {
     try {
       const parsedUrl = new URL(linkUrl);
@@ -435,6 +482,17 @@ const links = await page.locator("a").evaluateAll((anchors) =>
               } else {
                 externalPassed++;
               }
+            } else if (
+              !internal &&
+              isBotBlockedResponse(href, status)
+            ) {
+              // Sociala medier blockerar automatiska förfrågningar.
+              // Länken räknas inte som trasig.
+              externalSkipped++;
+
+              console.log(
+                `⚠ Kunde inte kontrollera automatiskt (HTTP ${status}): ${href}`
+              );
             } else {
               // Länken svarar men med felaktig HTTP-status.
               if (internal) {
@@ -589,7 +647,12 @@ const links = await page.locator("a").evaluateAll((anchors) =>
   );
 
   console.log(
-    `External links: ${externalPassed} passed, ${externalFailed} failed`
+    `External links: ${externalPassed} passed, ${externalFailed} failed` +
+      (
+        externalSkipped > 0
+          ? `, ${externalSkipped} could not be checked automatically`
+          : ""
+      )
   );
 
   console.log(
@@ -655,6 +718,7 @@ const links = await page.locator("a").evaluateAll((anchors) =>
 
     externalPassed,
     externalFailed,
+    externalSkipped,
 
     linkFailures,
 

@@ -47,6 +47,15 @@ export async function checkSocialMedia(
     url: string;
   }[] = [];
 
+  // Sparar sociala medier som inte går att verifiera automatiskt,
+  // t.ex. Facebook-profiler som bara har ett ID i URL:en och där
+  // profilens namn inte kan läsas.
+  const unverified: {
+    platform: string;
+    url: string;
+    message: string;
+  }[] = [];
+
   // Sparar sociala medier som inte kan verifieras
   // eller som inte verkar tillhöra företaget.
   const failed: {
@@ -74,6 +83,9 @@ export async function checkSocialMedia(
   // så att vi inte råkar använda titeln från den sista sidan.
   let websiteTitle = "";
 
+  // Extra företagsnamn som hittas på startsidan.
+  let pageCompanyNames: string[] = [];
+
   try {
 
     await page.goto(websiteUrl, {
@@ -81,6 +93,85 @@ export async function checkSocialMedia(
     });
 
     websiteTitle = await page.title();
+
+    // Hämtar företagsnamn från og:site_name, JSON-LD och
+    // copyright-raden i sidfoten. Sidtiteln innehåller ofta
+    // sökordstext (t.ex. "Målare i Skåne") och inte själva
+    // företagsnamnet.
+    pageCompanyNames = await page.evaluate(() => {
+
+      const names: string[] = [];
+
+      const ogSiteName =
+        document
+          .querySelector('meta[property="og:site_name"]')
+          ?.getAttribute("content");
+
+      if (ogSiteName) {
+        names.push(ogSiteName);
+      }
+
+      const businessTypes = [
+        "Organization",
+        "LocalBusiness",
+        "Corporation",
+        "ProfessionalService",
+        "WebSite",
+      ];
+
+      const collect = (node: unknown): void => {
+
+        if (!node || typeof node !== "object") {
+          return;
+        }
+
+        if (Array.isArray(node)) {
+          node.forEach(collect);
+          return;
+        }
+
+        const object = node as Record<string, unknown>;
+
+        const rawType = object["@type"];
+
+        const types = Array.isArray(rawType)
+          ? rawType
+          : [rawType];
+
+        if (
+          typeof object.name === "string" &&
+          types.some((type) =>
+            businessTypes.includes(String(type))
+          )
+        ) {
+          names.push(object.name);
+        }
+
+        Object.values(object).forEach(collect);
+      };
+
+      document
+        .querySelectorAll('script[type="application/ld+json"]')
+        .forEach((script) => {
+          try {
+            collect(JSON.parse(script.textContent || ""));
+          } catch {
+            // Ignorerar JSON-LD som inte går att läsa.
+          }
+        });
+
+      const bodyText = document.body?.innerText ?? "";
+
+      const copyrightMatch = bodyText.match(
+        /(?:©|copyright)\s*(?:©\s*)?\d{4}\s+([^\n.|–—-]{3,60})/i
+      );
+
+      if (copyrightMatch?.[1]) {
+        names.push(copyrightMatch[1].trim());
+      }
+
+      return names;
+    });
 
   } catch {
 
@@ -265,6 +356,193 @@ export async function checkSocialMedia(
     await page.waitForTimeout(1500);
   }
 
+  // Normaliserar text så att "Måleri", "maleri" och "M-å-l-e-r-i"
+  // jämförs lika: tar bort accenter/prickar och allt utom a-z/0-9.
+  const normalizeName = (value: string): string =>
+    value
+      .replace(/&amp;/gi, "&")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+
+  // Namn som en profil kan jämföras mot.
+  const companyNameCandidates = [
+    ...new Set(
+      [
+        companyName,
+        ...pageCompanyNames,
+        domainName,
+      ]
+        .map(normalizeName)
+        .filter((name) => name.length >= 4)
+    ),
+  ];
+
+  // Namnet som visas i rapporten om en profil inte matchar.
+  // Föredrar riktiga företagsnamn framför sidtiteln.
+  const displayCompanyName =
+    pageCompanyNames[pageCompanyNames.length - 1] ||
+    pageCompanyNames[0] ||
+    companyName ||
+    domainName;
+
+  // Två namn matchar om det ena innehåller det andra.
+  // Kortare än 5 tecken ignoreras för att undvika slumpträffar.
+  const namesMatch = (a: string, b: string): boolean => {
+
+    if (a.length < 5 || b.length < 5) {
+      return a.length >= 4 && a === b;
+    }
+
+    return a.includes(b) || b.includes(a);
+  };
+
+  // Räknar hur många tecken som skiljer två texter åt
+  // (Levenshtein-avstånd).
+  const editDistance = (a: string, b: string): number => {
+
+    const previous = Array.from(
+      { length: b.length + 1 },
+      (_, index) => index
+    );
+
+    for (let i = 1; i <= a.length; i++) {
+
+      let diagonal = previous[0];
+      previous[0] = i;
+
+      for (let j = 1; j <= b.length; j++) {
+
+        const temp = previous[j];
+
+        previous[j] =
+          a[i - 1] === b[j - 1]
+            ? diagonal
+            : Math.min(
+                diagonal,
+                previous[j],
+                previous[j - 1]
+              ) + 1;
+
+        diagonal = temp;
+      }
+    }
+
+    return previous[b.length];
+  };
+
+  // Luddig matchning för namn som nästan är lika, t.ex.
+  // "fjohnssonsmur" mot "fjohnssonmurhantverk".
+  //
+  // Det kortare namnet jämförs mot alla delar av det längre
+  // namnet. Minst 8 tecken krävs och högst ~20 % av tecknen
+  // får skilja, så att helt olika namn inte matchar.
+  const namesFuzzyMatch = (a: string, b: string): boolean => {
+
+    const shorter = a.length <= b.length ? a : b;
+    const longer = a.length <= b.length ? b : a;
+
+    if (shorter.length < 8) {
+      return false;
+    }
+
+    const allowed = Math.floor(shorter.length * 0.2);
+
+    for (
+      let size = shorter.length - allowed;
+      size <= shorter.length + allowed;
+      size++
+    ) {
+
+      if (size > longer.length) {
+        break;
+      }
+
+      for (let start = 0; start + size <= longer.length; start++) {
+
+        if (
+          editDistance(
+            shorter,
+            longer.slice(start, start + size)
+          ) <= allowed
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  // Försöker läsa profilens namn genom att öppna profilsidan.
+  // Används när URL:en bara innehåller ett ID (t.ex. Facebook
+  // profile.php?id=...). Returnerar tom text om namnet inte
+  // går att läsa (inloggningsvägg, blockering, fel).
+  const readProfileName = async (
+    profileUrl: string
+  ): Promise<string> => {
+
+    try {
+
+      await page.goto(profileUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 15000,
+      });
+
+      const rawTitle = await page.evaluate(() =>
+        document
+          .querySelector('meta[property="og:title"]')
+          ?.getAttribute("content") ||
+        document.title ||
+        ""
+      );
+
+      // Tar bort plattformsnamnet i slutet, t.ex. " | Facebook".
+      const name = rawTitle
+        .replace(
+          /\s*[|\-–—]\s*(facebook|instagram|linkedin|youtube|tiktok)\b.*$/i,
+          ""
+        )
+        .trim();
+
+      // Inloggningssidor och felsidor räknas inte som profilnamn.
+      if (
+        !name ||
+        /log ?in|logga in|sign ?up|registrera|facebook|instagram|linkedin|youtube|tiktok|error|fel/i.test(
+          name
+        )
+      ) {
+        return "";
+      }
+
+      return name;
+
+    } catch {
+
+      return "";
+    }
+  };
+
+  // Delar av en profil-URL som inte är ett namn.
+  const genericPathSegments = new Set([
+    "people",
+    "pages",
+    "page",
+    "profile.php",
+    "p",
+    "groups",
+    "pg",
+    "public",
+    "company",
+    "in",
+    "user",
+    "c",
+    "channel",
+    "sharer",
+    "sharer.php",
+  ]);
+
   // Kontrollerar alla hittade sociala medier.
   for (const [
     platform,
@@ -277,69 +555,93 @@ export async function checkSocialMedia(
       const socialUrlObject =
         new URL(socialUrl);
 
-      // Hämtar användarnamnet från URL:en.
-      const username =
+      // Hämtar alla delar av sökvägen som kan innehålla ett namn.
+      //
+      // Exempel Facebook:
+      //   /people/Henkes-Måleri-Ab/61557009826851/
+      //   -> "Henkes-Måleri-Ab" (siffer-ID:t hoppas över)
+      const nameSegments =
         socialUrlObject.pathname
-          .replace(/^\/+/, "")
           .split("/")
           .filter(Boolean)
-          .pop()
-          ?.toLowerCase() ?? "";
+          .map((segment) => {
+            try {
+              return decodeURIComponent(segment);
+            } catch {
+              return segment;
+            }
+          })
+          .map((segment) => segment.replace(/^@/, ""))
+          .filter(
+            (segment) =>
+              !genericPathSegments.has(segment.toLowerCase()) &&
+              !/^\d+$/.test(segment)
+          );
 
-      // Normaliserar företagsnamnet.
-      const normalizedCompanyName =
-        companyName
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .replace(/[^a-z0-9]/g, "");
+      // Matchar om något namn i URL:en liknar något
+      // av företagets namn eller domännamnet.
+      let matches = nameSegments.some((segment) => {
 
-      // Normaliserar användarnamnet.
-      const normalizedUsername =
-        username
-          .replace(/[^a-z0-9]/g, "");
+        const normalizedSegment =
+          normalizeName(segment);
 
-      // Normaliserar domännamnet.
-      const normalizedDomain =
-        domainName
-          .replace(/[^a-z0-9]/g, "");
+        return companyNameCandidates.some(
+          (candidate) =>
+            namesMatch(normalizedSegment, candidate) ||
+            namesFuzzyMatch(normalizedSegment, candidate)
+        );
+      });
 
-      // Kontrollerar om användarnamnet
-      // matchar företagsnamnet.
-      const matchesCompany =
-        normalizedCompanyName.length > 0 &&
-        (
-          normalizedUsername.includes(
-            normalizedCompanyName
-          ) ||
-          normalizedCompanyName.includes(
-            normalizedUsername
-          )
+      // Om URL:en inte innehåller något namn (bara ett ID)
+      // försöker vi läsa profilens namn från själva profilsidan.
+      let profileNameNotReadable = false;
+
+      if (!matches && nameSegments.length === 0) {
+
+        const profileName =
+          await readProfileName(socialUrl);
+
+        if (profileName) {
+
+          const normalizedProfileName =
+            normalizeName(profileName);
+
+          matches = companyNameCandidates.some(
+            (candidate) =>
+              namesMatch(normalizedProfileName, candidate) ||
+              namesFuzzyMatch(normalizedProfileName, candidate)
+          );
+
+        } else {
+
+          profileNameNotReadable = true;
+        }
+      }
+
+      if (!matches && profileNameNotReadable) {
+
+        unverified.push({
+          platform,
+          url: socialUrl,
+          message:
+            "Profilens namn står inte i URL:en och kunde inte läsas från sidan",
+        });
+
+        console.log(
+          `⚠ ${platform}: ${socialUrl}`
         );
 
-      // Kontrollerar om användarnamnet
-      // matchar domännamnet.
-      const matchesDomain =
-        normalizedDomain.length > 0 &&
-        (
-          normalizedUsername.includes(
-            normalizedDomain
-          ) ||
-          normalizedDomain.includes(
-            normalizedUsername
-          )
+        console.log(
+          "  Kunde inte verifieras automatiskt (kontrollera profilen manuellt)"
         );
 
-      const matches =
-        matchesCompany ||
-        matchesDomain;
-
-      if (!matches) {
+      } else if (!matches) {
 
         failed.push({
           platform,
           url: socialUrl,
           message:
-            `Kontot verkar inte matcha företaget ${companyName}`,
+            `Kontot verkar inte matcha företaget ${displayCompanyName}`,
         });
 
         console.log(
@@ -347,7 +649,7 @@ export async function checkSocialMedia(
         );
 
         console.log(
-          `  Kontot verkar inte tillhöra företaget ${companyName}`
+          `  Kontot verkar inte tillhöra företaget ${displayCompanyName}`
         );
 
       } else {
@@ -397,14 +699,23 @@ export async function checkSocialMedia(
     `Sociala medier som inte matchar: ${failed.length}`
   );
 
+  console.log(
+    `Sociala medier som inte kunde verifieras: ${unverified.length}`
+  );
+
   // Returnerar resultaten.
   //
   // found = profiler som matchar företaget.
   // failed = profiler som inte matchar eller inte kunde
   // verifieras. En profil finns alltså aldrig i båda.
+  //
+  // unverified = profiler som inte gick att kontrollera
+  // automatiskt och som bör granskas manuellt.
   return {
     found: matched,
 
     failed,
+
+    unverified,
   };
 }
