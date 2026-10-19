@@ -33,6 +33,8 @@ export async function checkValidation(
   let phonePassed = 0;
 
   // Räknar telefonfält som inte klarar valideringen.
+  // Antal telefonfält som accepterade ett ogiltigt nummer.
+  // Rapporteras som WARNING (inte FAIL) i website-scanner.ts.
   let phoneFailed = 0;
 
   // Sparar detaljer om e-postfel.
@@ -329,7 +331,7 @@ export async function checkValidation(
   );
 
   console.log(
-    `Phone validation: ${phonePassed} passed, ${phoneFailed} failed`
+    `Phone validation: ${phonePassed} passed, ${phoneFailed} warnings`
   );
 
   // Visar detaljer om e-postfel.
@@ -366,7 +368,7 @@ export async function checkValidation(
   ) {
 
     console.log(
-      "\nTelefonfel:"
+      "\nTelefonvarningar:"
     );
 
     for (

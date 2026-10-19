@@ -38,6 +38,15 @@ export async function checkSocialMedia(
   // Sparar hittade sociala medier.
   const found = new Map<string, string>();
 
+  // Sparar sociala medier som har verifierats och
+  // verkar tillhöra företaget.
+  // (found ovan innehåller ALLA hittade profiler,
+  // även de som inte matchar.)
+  const matched: {
+    platform: string;
+    url: string;
+  }[] = [];
+
   // Sparar sociala medier som inte kan verifieras
   // eller som inte verkar tillhöra företaget.
   const failed: {
@@ -343,6 +352,11 @@ export async function checkSocialMedia(
 
       } else {
 
+        matched.push({
+          platform,
+          url: socialUrl,
+        });
+
         console.log(
           `✓ ${platform}: ${socialUrl}`
         );
@@ -384,13 +398,12 @@ export async function checkSocialMedia(
   );
 
   // Returnerar resultaten.
+  //
+  // found = profiler som matchar företaget.
+  // failed = profiler som inte matchar eller inte kunde
+  // verifieras. En profil finns alltså aldrig i båda.
   return {
-    found: [...found.entries()].map(
-      ([platform, url]) => ({
-        platform,
-        url,
-      })
-    ),
+    found: matched,
 
     failed,
   };

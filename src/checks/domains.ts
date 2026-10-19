@@ -54,9 +54,13 @@ export async function checkDomains(
         const finalUrl =
           response.url || domain;
 
+        // 202 räknas inte som fungerande. Det är oftast en
+        // challenge-/anti-bot-sida (t.ex. SiteGround) som inte
+        // går att verifiera med en vanlig förfrågan.
         const working =
           response.status >= 200 &&
-          response.status < 400;
+          response.status < 400 &&
+          response.status !== 202;
 
         results.push({
           url: domain,
@@ -84,7 +88,9 @@ export async function checkDomains(
         } else {
 
           console.log(
-            `✗ ${domain} (${response.status})`
+            response.status === 202
+              ? `⚠ ${domain} (202 – challenge/anti-bot, kunde inte verifieras)`
+              : `✗ ${domain} (${response.status})`
           );
         }
 

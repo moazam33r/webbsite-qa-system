@@ -894,42 +894,46 @@ const main: HTMLElement | null =
 
   const aiReviewedIssues = await reviewTextIssues(textIssues);
 
-  console.log("\n--- FELSÖKNING TEXTKONTROLL ---");
-  console.log(`LanguageTool-träffar: ${textIssues.length}`);
-  console.log(`AI-granskade träffar: ${aiReviewedIssues.length}`);
+  // Felsökningsutskrift för textkontrollen.
+  // Visas bara om QA_DEBUG=true finns i .env.
+  if (process.env.QA_DEBUG === "true") {
+    console.log("\n--- FELSÖKNING TEXTKONTROLL ---");
+    console.log(`LanguageTool-träffar: ${textIssues.length}`);
+    console.log(`AI-granskade träffar: ${aiReviewedIssues.length}`);
 
-  console.log(
-    "AI bedömer som stavfel:",
-    aiReviewedIssues.filter(
-      (issue) => issue.aiAssessment === "LIKELY_SPELLING"
-    ).length
-  );
+    console.log(
+      "AI bedömer som stavfel:",
+      aiReviewedIssues.filter(
+        (issue) => issue.aiAssessment === "LIKELY_SPELLING"
+      ).length
+    );
 
-  console.log(
-    "AI bedömer som korrekta:",
-    aiReviewedIssues.filter(
-      (issue) => issue.aiAssessment === "LIKELY_CORRECT"
-    ).length
-  );
+    console.log(
+      "AI bedömer som korrekta:",
+      aiReviewedIssues.filter(
+        (issue) => issue.aiAssessment === "LIKELY_CORRECT"
+      ).length
+    );
 
-  console.log(
-    "AI lämnar osäkra:",
-    aiReviewedIssues.filter(
-      (issue) => issue.aiAssessment === "REVIEW"
-    ).length
-  );
+    console.log(
+      "AI lämnar osäkra:",
+      aiReviewedIssues.filter(
+        (issue) => issue.aiAssessment === "REVIEW"
+      ).length
+    );
 
-  console.table(
-    aiReviewedIssues.map((issue) => ({
-      text: issue.matchedText,
-      LanguageTool: issue.classification,
-      Ollama: issue.aiAssessment,
-      förklaring: issue.aiExplanation,
-      sida: issue.pageUrl,
-    }))
-  );
+    console.table(
+      aiReviewedIssues.map((issue) => ({
+        text: issue.matchedText,
+        LanguageTool: issue.classification,
+        Ollama: issue.aiAssessment,
+        förklaring: issue.aiExplanation,
+        sida: issue.pageUrl,
+      }))
+    );
 
-  console.log("--- SLUT FELSÖKNING ---\n");
+    console.log("--- SLUT FELSÖKNING ---\n");
+  }
 
   const formatIssue = (
     issue: (typeof aiReviewedIssues)[number]

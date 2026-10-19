@@ -36,7 +36,10 @@ import { QACheckResult } from "./qa-report";
 
 const HIDE_DUPLICATE_AI_SECTIONS = true;
 const INCLUDE_TECHNICAL_APPENDIX = true;
-const PERFORMANCE_TARGET = 90;
+// Måltal för PageSpeed-score. Ska stämma med gränserna i
+// checks/performance.ts (DESKTOP_PASS_SCORE / MOBILE_PASS_SCORE).
+const DESKTOP_PERFORMANCE_TARGET = 90;
+const MOBILE_PERFORMANCE_TARGET = 75;
 
 // ============================================================
 // DATASTRUKTURER
@@ -1445,7 +1448,8 @@ function addPerformanceBar(
     document: PDFKit.PDFDocument,
     y: number,
     label: string,
-    score: number
+    score: number,
+    target: number
 ): void {
     const safeScore = Math.max(0, Math.min(100, score));
     const trackX = PAGE.margin + 70;
@@ -1473,12 +1477,12 @@ function addPerformanceBar(
             5
         )
         .fill(
-            safeScore >= PERFORMANCE_TARGET
+            safeScore >= target
                 ? COLORS.pass
                 : COLORS.warning
         );
 
-    const targetX = trackX + (trackWidth * PERFORMANCE_TARGET) / 100;
+    const targetX = trackX + (trackWidth * target) / 100;
 
     document
         .rect(targetX - 1, y - 4, 2, 28)
@@ -1520,7 +1524,13 @@ function addPerformance(
     const y = document.y + 6;
 
     if (desktop !== undefined) {
-        addPerformanceBar(document, y, "Desktop", desktop);
+        addPerformanceBar(
+            document,
+            y,
+            "Desktop",
+            desktop,
+            DESKTOP_PERFORMANCE_TARGET
+        );
     }
 
     if (mobile !== undefined) {
@@ -1528,7 +1538,8 @@ function addPerformance(
             document,
             y + (desktop !== undefined ? 36 : 0),
             "Mobil",
-            mobile
+            mobile,
+            MOBILE_PERFORMANCE_TARGET
         );
     }
 
@@ -1537,7 +1548,7 @@ function addPerformance(
         .font("Helvetica")
         .fontSize(8)
         .text(
-            `Den svarta linjen markerar målet ${PERFORMANCE_TARGET}/100.`,
+            `Den svarta linjen markerar målet: desktop ${DESKTOP_PERFORMANCE_TARGET}/100, mobil ${MOBILE_PERFORMANCE_TARGET}/100.`,
             PAGE.margin,
             y + (desktop !== undefined && mobile !== undefined ? 76 : 40),
             { width: PAGE.contentWidth }

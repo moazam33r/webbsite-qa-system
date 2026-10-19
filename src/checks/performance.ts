@@ -1,5 +1,23 @@
 import "dotenv/config";
 
+// =========================================================
+// GRÄNSER FÖR PERFORMANCE-SCORE
+// =========================================================
+
+// Lägsta score som räknas som godkänd (PASS).
+const DESKTOP_PASS_SCORE = 90;
+const MOBILE_PASS_SCORE = 75;
+
+// Under detta värde räknas resultatet som FAIL.
+// Mellan FAIL-gränsen och PASS-gränsen blir det WARNING.
+const FAIL_SCORE = 50;
+
+// true  = ett dåligt Core Web Vital (t.ex. LCP över 4 s) ger FAIL
+//         även om score är över gränsen.
+// false = endast score avgör om resultatet är PASS/WARNING/FAIL.
+const CORE_WEB_VITALS_CAN_OVERRIDE_SCORE = false;
+
+
 // Status som används för prestandamätningar.
 type PerformanceMetricStatus =
   | "PASS"
@@ -408,19 +426,24 @@ export async function checkPerformance(
       // STATUS
       // ==============================
 
-      // Performance 90+ räknas som PASS.
-      // 50-89 räknas som WARNING.
-      // Under 50 räknas som FAIL.
+      // Desktop: 90+ = PASS. Mobile: 75+ = PASS.
+      // Mellan 50 och PASS-gränsen = WARNING.
+      // Under 50 = FAIL.
+      const passScore =
+        strategy === "mobile"
+          ? MOBILE_PASS_SCORE
+          : DESKTOP_PASS_SCORE;
+
       let status:
         | "PASS"
         | "WARNING"
         | "FAIL";
 
-      if (score >= 90) {
+      if (score >= passScore) {
 
         status = "PASS";
 
-      } else if (score >= 50) {
+      } else if (score >= FAIL_SCORE) {
 
         status = "WARNING";
 
@@ -432,7 +455,11 @@ export async function checkPerformance(
       // Om ett kritiskt Core Web Vital-värde
       // är dåligt ska resultatet inte döljas
       // bakom ett relativt högt score.
-      if (
+      if (!CORE_WEB_VITALS_CAN_OVERRIDE_SCORE) {
+
+        // Endast score avgör status.
+
+      } else if (
         lcpStatus === "FAIL" ||
         clsStatus === "FAIL" ||
         tbtStatus === "FAIL" ||

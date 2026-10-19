@@ -208,14 +208,24 @@ function createFallbackAnalysis(
   const recommendations: string[] = [];
 
   // Rekommendation för SEO.
-  if (seoResult) {
+  // Visas bara om SEO-kontrollen faktiskt hittade något.
+  // Texten pekar på de riktiga fynden i stället för att
+  // gissa vilka problem det gäller.
+  if (
+    seoResult &&
+    seoResult.status !== "PASS"
+  ) {
     recommendations.push(
-      "- Åtgärda de identifierade SEO-problemen, särskilt saknade H1-taggar, flera H1-taggar och saknad meta description."
+      "- Åtgärda de SEO-problem som listas under Viktigaste problemen."
     );
   }
 
   // Rekommendation för validering.
-  if (validationResult) {
+  // Visas bara om valideringskontrollen hittade något.
+  if (
+    validationResult &&
+    validationResult.status !== "PASS"
+  ) {
     recommendations.push(
       "- Förbättra valideringen av telefonnummer i de berörda formulären så att ogiltiga nummer stoppas innan formuläret skickas."
     );
