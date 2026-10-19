@@ -39,7 +39,7 @@ const INCLUDE_TECHNICAL_APPENDIX = true;
 // Måltal för PageSpeed-score. Ska stämma med gränserna i
 // checks/performance.ts (DESKTOP_PASS_SCORE / MOBILE_PASS_SCORE).
 const DESKTOP_PERFORMANCE_TARGET = 90;
-const MOBILE_PERFORMANCE_TARGET = 75;
+const MOBILE_PERFORMANCE_TARGET = 90;
 
 // ============================================================
 // DATASTRUKTURER

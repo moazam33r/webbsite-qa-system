@@ -6,7 +6,7 @@ import "dotenv/config";
 
 // Lägsta score som räknas som godkänd (PASS).
 const DESKTOP_PASS_SCORE = 90;
-const MOBILE_PASS_SCORE = 75;
+const MOBILE_PASS_SCORE = 90;
 
 // Under detta värde räknas resultatet som FAIL.
 // Mellan FAIL-gränsen och PASS-gränsen blir det WARNING.
