@@ -1295,3 +1295,99 @@ button:disabled {
     0 0 0 3px rgba(37, 99, 235, 0.08);
 
 }
+
+/* ========================================= */
+/* VAL AV TESTER */
+/* ========================================= */
+
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: #eef2f9;
+  border-radius: 12px;
+}
+
+.mode-option {
+  border: 0;
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: transparent;
+  color: #4b5772;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mode-option.active {
+  background: white;
+  color: #1d4ed8;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.1);
+}
+
+.test-summary {
+  margin: 10px 2px 0;
+  font-size: 12px;
+  color: #5b6680;
+}
+
+.test-summary.warn {
+  color: #b42318;
+  font-weight: 600;
+}
+
+.test-picker {
+  margin-top: 12px;
+}
+
+.test-picker-actions {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.link-button {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: #2563eb;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.test-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+}
+
+.test-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #e5e9f2;
+  border-radius: 9px;
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.test-item:hover {
+  background: #f5f8ff;
+}
+
+.test-item input {
+  margin: 0;
+  accent-color: #2563eb;
+}
+
+.test-note {
+  margin: 10px 2px 0;
+  font-size: 11px;
+  color: #7a859d;
+}

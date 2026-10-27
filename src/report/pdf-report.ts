@@ -49,6 +49,10 @@ export interface PDFReportData {
     websiteUrl: string;
     results: QACheckResult[];
     aiAnalysis?: string;
+
+    // Vilka tester som valdes. Saknas = hela analysen.
+    selectedTests?: string[];
+    allTestsSelected?: boolean;
 }
 
 export interface CSVPDFReportItem {
@@ -57,6 +61,8 @@ export interface CSVPDFReportItem {
     results: QACheckResult[];
     error?: string;
     aiAnalysis?: string;
+    selectedTests?: string[];
+    allTestsSelected?: boolean;
 }
 
 type Priority = "Kritisk" | "Viktig" | "Liten";
@@ -1070,6 +1076,47 @@ function addSectionTitle(
 }
 
 // ============================================================
+// VALDA TESTER
+// ============================================================
+
+const TEST_LABELS: Record<string, string> = {
+    seo: "SEO",
+    performance: "Prestanda",
+    responsive: "Responsivitet",
+    cookie: "Cookie / GDPR",
+    security: "HTTPS / säkerhet",
+    domains: "Alternativa domäner",
+    similar: "Liknande domäner",
+    text: "Text / stavning",
+    links: "Länkar",
+    images: "Bilder",
+    forms: "Formulär",
+    email: "E-postvalidering",
+    phone: "Telefonvalidering",
+    navigation: "Navigation",
+    cta: "CTA",
+    social: "Sociala medier",
+    maps: "Google Maps",
+    gbp: "Google Business Profile",
+    ai: "AI-analys",
+};
+
+// Text som visar vilka tester som kördes. Tom vid hela analysen,
+// så att en vanlig rapport ser ut som förut.
+export function describeSelectedTests(
+    selectedTests?: string[],
+    allTestsSelected?: boolean
+): string {
+    if (allTestsSelected !== false || !selectedTests) {
+        return "";
+    }
+
+    const names = selectedTests.map((id) => TEST_LABELS[id] ?? id);
+
+    return `Valda tester (${names.length} av ${Object.keys(TEST_LABELS).length}): ${names.join(", ")}`;
+}
+
+// ============================================================
 // WEBBPLATSINFORMATION
 // ============================================================
 
@@ -1077,12 +1124,15 @@ function addWebsiteInformation(
     document: PDFKit.PDFDocument,
     websiteUrl: string,
     totalPages: number,
-    checkCount: number
+    checkCount: number,
+    scopeText = ""
 ): void {
     const startY = document.y;
 
+    const cardHeight = scopeText ? 84 : 58;
+
     document
-        .roundedRect(PAGE.margin, startY, PAGE.contentWidth, 58, 8)
+        .roundedRect(PAGE.margin, startY, PAGE.contentWidth, cardHeight, 8)
         .fill(COLORS.light);
 
     document
@@ -1111,7 +1161,19 @@ function addWebsiteInformation(
             startY + 42
         );
 
-    document.y = startY + 76;
+    if (scopeText) {
+        document
+            .fillColor(COLORS.text)
+            .font("Helvetica-Bold")
+            .fontSize(8)
+            .text(scopeText, 65, startY + 56, {
+                width: PAGE.contentWidth - 30,
+                height: 24,
+                ellipsis: true,
+            });
+    }
+
+    document.y = startY + cardHeight + 18;
 }
 
 // ============================================================
@@ -2118,7 +2180,8 @@ export async function createPDFReport(
         document,
         data.websiteUrl,
         getTotalPages(data.results),
-        data.results.length
+        data.results.length,
+        describeSelectedTests(data.selectedTests, data.allTestsSelected)
     );
 
     addReportBody(
@@ -2183,10 +2246,21 @@ export async function createCSVPDFReport(
         "Sammanställning av webbplatser som analyserats via CSV-import."
     );
 
+    const csvScope = describeSelectedTests(
+        reports.find((r) => r.success)?.selectedTests,
+        reports.find((r) => r.success)?.allTestsSelected
+    );
+
     const overviewY = document.y;
 
     document
-        .roundedRect(PAGE.margin, overviewY, PAGE.contentWidth, 90, 8)
+        .roundedRect(
+            PAGE.margin,
+            overviewY,
+            PAGE.contentWidth,
+            csvScope ? 114 : 90,
+            8
+        )
         .fill(COLORS.light);
 
     document
@@ -2224,7 +2298,19 @@ export async function createCSVPDFReport(
         .fontSize(8)
         .text(`Rapport skapad: ${getReportDate()}`, 70, overviewY + 68);
 
-    document.y = overviewY + 110;
+    if (csvScope) {
+        document
+            .fillColor(COLORS.text)
+            .font("Helvetica-Bold")
+            .fontSize(8)
+            .text(csvScope, 70, overviewY + 80, {
+                width: PAGE.contentWidth - 40,
+                height: 22,
+                ellipsis: true,
+            });
+    }
+
+    document.y = overviewY + (csvScope ? 134 : 110);
 
     // --------------------------------------------------------
     // RESULTAT PER WEBBPLATS

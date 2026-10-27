@@ -38,6 +38,61 @@ export type ScanProgressCallback = (
 
 
 // =========================================================
+// VAL AV TESTER
+// =========================================================
+
+// Alla tester som kan väljas. Crawlern (sidor) körs alltid, eftersom
+// alla andra tester behöver veta vilka sidor som finns.
+export const QA_TESTS = [
+  { id: "seo", label: "SEO" },
+  { id: "performance", label: "Prestanda" },
+  { id: "responsive", label: "Responsivitet" },
+  { id: "cookie", label: "Cookie / GDPR" },
+  { id: "security", label: "HTTPS / säkerhet" },
+  { id: "domains", label: "Alternativa domäner" },
+  { id: "similar", label: "Liknande domäner" },
+  { id: "text", label: "Text / stavning" },
+  { id: "links", label: "Länkar" },
+  { id: "images", label: "Bilder" },
+  { id: "forms", label: "Formulär" },
+  { id: "email", label: "E-postvalidering" },
+  { id: "phone", label: "Telefonvalidering" },
+  { id: "navigation", label: "Navigation" },
+  { id: "cta", label: "CTA" },
+  { id: "social", label: "Sociala medier" },
+  { id: "maps", label: "Google Maps" },
+  { id: "gbp", label: "Google Business Profile" },
+  { id: "ai", label: "AI-analys" },
+] as const;
+
+export type QATestId = (typeof QA_TESTS)[number]["id"];
+
+export const ALL_QA_TEST_IDS: QATestId[] = QA_TESTS.map((t) => t.id);
+
+export interface ScanOptions {
+  // Vilka tester som ska köras. Utelämnad = hela QA-analysen.
+  tests?: string[];
+}
+
+// Rensar en inkommande lista: okända id:n tas bort. Tom eller saknad
+// lista betyder hela analysen.
+export function normalizeTests(input: unknown): QATestId[] {
+
+  if (!Array.isArray(input)) {
+    return [...ALL_QA_TEST_IDS];
+  }
+
+  const wanted = new Set(
+    input.filter((x): x is string => typeof x === "string")
+  );
+
+  const valid = ALL_QA_TEST_IDS.filter((id) => wanted.has(id));
+
+  return valid.length > 0 ? valid : [...ALL_QA_TEST_IDS];
+}
+
+
+// =========================================================
 // WEBSITE QA SYSTEM
 // =========================================================
 
@@ -45,8 +100,14 @@ export type ScanProgressCallback = (
 export async function scanWebsite(
   page: Page,
   url: string,
-  onProgress?: ScanProgressCallback
+  onProgress?: ScanProgressCallback,
+  options: ScanOptions = {}
 ) {
+
+  // Vilka tester som körs. Sidor/crawling körs alltid.
+  const selectedTests = new Set<QATestId>(normalizeTests(options.tests));
+
+  const enabled = (id: QATestId) => selectedTests.has(id);
 
   console.log("\n=================================");
   console.log("       WEBSITE QA SYSTEM");
@@ -203,6 +264,8 @@ export async function scanWebsite(
 
 
  
+  if (enabled("seo")) {
+
   const seoResult = await checkSEO(
     page,
     pages
@@ -279,9 +342,15 @@ export async function scanWebsite(
   }
 
 
+  }
+
+
   // =======================================================
   // 3. PRESTANDA
   // =======================================================
+
+  if (enabled("performance")) {
+
 
   reportProgress(
     35,
@@ -312,9 +381,15 @@ export async function scanWebsite(
   }
 
 
+  }
+
+
   // =======================================================
   // 4. RESPONSIVITET
   // =======================================================
+
+  if (enabled("responsive")) {
+
 
   reportProgress(
     38,
@@ -347,9 +422,15 @@ export async function scanWebsite(
   }
 
 
+  }
+
+
   // =======================================================
   // 5. COOKIE / GDPR
   // =======================================================
+
+  if (enabled("cookie")) {
+
 
   reportProgress(
     41,
@@ -382,9 +463,15 @@ export async function scanWebsite(
   }
 
 
+  }
+
+
   // =======================================================
   // 6. HTTPS / SECURITY
   // =======================================================
+
+  if (enabled("security")) {
+
 
   reportProgress(
     44,
@@ -401,9 +488,15 @@ export async function scanWebsite(
   });
 
 
+  }
+
+
   // =======================================================
   // 7. ALTERNATIVA DOMÄNER
   // =======================================================
+
+  if (enabled("domains")) {
+
 
   reportProgress(
     47,
@@ -456,9 +549,15 @@ results.push({
 });
 
 
+  }
+
+
   // =======================================================
   // 8. HÄMTAR FÖRETAGSNAMN
   // =======================================================
+
+  if (enabled("similar")) {
+
 
   reportProgress(
     49,
@@ -650,9 +749,15 @@ results.push({
   }
 
 
+  }
+
+
   // =======================================================
   // 10. TEXT / STAVNING
   // =======================================================
+
+  if (enabled("text")) {
+
 
   console.log("\n--- TEXT / STAVNING ---");
 
@@ -1047,9 +1152,15 @@ const main: HTMLElement | null =
         "Textkontrollen genomfördes utan sannolika stavfel eller osäkra träffar.",
     });
   }
+  }
+
+
   // =======================================================
   // 11. LÄNKAR
   // =======================================================
+
+  if (enabled("links")) {
+
 
   console.log("\n--- LÄNKAR ---");
 
@@ -1386,9 +1497,15 @@ const main: HTMLElement | null =
   }
 
 
+  }
+
+
   // =======================================================
   // 12. BILDER
   // =======================================================
+
+  if (enabled("images")) {
+
 
   console.log("\n--- BILDER ---");
 
@@ -1422,9 +1539,15 @@ const main: HTMLElement | null =
   }
 
 
+  }
+
+
   // =======================================================
   // 13. FORMULÄR
   // =======================================================
+
+  if (enabled("forms")) {
+
 
   console.log("\n--- FORMULÄR ---");
 
@@ -1448,6 +1571,9 @@ const main: HTMLElement | null =
   });
 
 
+  }
+
+
   // =======================================================
   // 14. FORMULÄRVALIDERING
   // =======================================================
@@ -1458,6 +1584,8 @@ const main: HTMLElement | null =
     65,
     "Kontrollerar formulärvalidering..."
   );
+
+  if (enabled("email") || enabled("phone")) {
 
   const validationResult = await checkValidation(
     page,
@@ -1474,11 +1602,17 @@ const main: HTMLElement | null =
         mappedPercentage,
         message
       );
+    },
+    {
+      email: enabled("email"),
+      phone: enabled("phone"),
     }
   );
 
   // Rapporterar e-postvalidering separat.
-if (validationResult.emailFailed > 0) {
+if (!enabled("email")) {
+  // E-postvalidering är inte vald.
+} else if (validationResult.emailFailed > 0) {
   results.push({
     name: "E-postvalidering",
     status: "FAIL",
@@ -1493,7 +1627,7 @@ if (validationResult.emailFailed > 0) {
 }
 
 // Rapporterar telefonvalidering separat.
-{
+if (enabled("phone")) {
   const tests = validationResult.phoneTests;
 
   const failed = tests.filter((t) => t.status === "failed");
@@ -1505,6 +1639,7 @@ if (validationResult.emailFailed > 0) {
     `  Fält: ${t.fieldName}\n` +
     `  Kontroll: ${PHONE_TEST_LABELS[t.test]}\n` +
     `  Testvärde: ${t.testValue}\n` +
+    `  Fältet är: ${t.required ? "obligatoriskt" : "valfritt"}\n` +
     `  Resultat: ${t.detail}`;
 
   if (tests.length === 0) {
@@ -1521,7 +1656,11 @@ if (validationResult.emailFailed > 0) {
 
     if (failed.length > 0) {
       sections.push(
-        "UNDERKÄNDA KONTROLLER\n\n" + failed.map(describe).join("\n\n")
+        (failed.some((t) => t.required)
+          ? "UNDERKÄNDA KONTROLLER"
+          : "SAKNAR VALIDERING (VALFRITT FÄLT – LÅG PRIORITET)") +
+          "\n\n" +
+          failed.map(describe).join("\n\n")
       );
     }
 
@@ -1547,17 +1686,27 @@ if (validationResult.emailFailed > 0) {
     results.push({
       name: "Telefonvalidering",
       // Underkänt eller oavgjort ska aldrig se ut som godkänt.
+      // Underkända kontroller på enbart valfria fält är ett mindre
+      // problem: besökaren kan lämna fältet tomt.
       status:
-        failed.length > 0 || inconclusive.length > 0 ? "WARNING" : "PASS",
+        failed.some((t) => t.required) || inconclusive.length > 0
+          ? "WARNING"
+          : "PASS",
       message: sections.join("\n\n"),
     });
   }
 }
 
 
+
+  }
+
   // =======================================================
   // 15. NAVIGATION
   // =======================================================
+
+  if (enabled("navigation")) {
+
 
   console.log("\n--- NAVIGATION ---");
 
@@ -1592,9 +1741,15 @@ if (validationResult.emailFailed > 0) {
   }
 
 
+  }
+
+
   // =======================================================
   // 16. CTA
   // =======================================================
+
+  if (enabled("cta")) {
+
 
   console.log("\n--- CTA ---");
 
@@ -1672,9 +1827,15 @@ if (validationResult.emailFailed > 0) {
   }
 
 
+  }
+
+
   // =======================================================
   // 17. SOCIALA MEDIER
   // =======================================================
+
+  if (enabled("social")) {
+
 
   console.log("\n--- SOCIALA MEDIER ---");
 
@@ -1730,9 +1891,15 @@ if (validationResult.emailFailed > 0) {
   });
 
 
+  }
+
+
   // =======================================================
   // 18. GOOGLE MAPS
   // =======================================================
+
+  if (enabled("maps")) {
+
 
   console.log("\n--- GOOGLE MAPS ---");
 
@@ -1773,9 +1940,15 @@ if (validationResult.emailFailed > 0) {
   });
 
 
+  }
+
+
   // =======================================================
   // 19. GOOGLE BUSINESS PROFILE
   // =======================================================
+
+  if (enabled("gbp")) {
+
 
   console.log("\n--- GOOGLE BUSINESS PROFILE ---");
 
@@ -1842,6 +2015,9 @@ if (validationResult.emailFailed > 0) {
   }
 
 
+  }
+
+
   // =======================================================
   // 20. AI-ANALYS
   // =======================================================
@@ -1853,8 +2029,11 @@ if (validationResult.emailFailed > 0) {
     "Analyserar QA-resultatet med AI..."
   );
 
-  let aiAnalysis =
-    "AI-analys kunde inte genomföras.";
+  let aiAnalysis = enabled("ai")
+    ? "AI-analys kunde inte genomföras."
+    : "";
+
+  if (enabled("ai")) {
 
   try {
 
@@ -1876,6 +2055,8 @@ if (validationResult.emailFailed > 0) {
         "AI-analysen kunde inte genomföras",
     });
   }
+  }
+
 
 
   // =======================================================
@@ -1915,5 +2096,9 @@ if (validationResult.emailFailed > 0) {
     pages: pageResult.pages,
     results,
     aiAnalysis,
+
+    // Vilka tester som valdes för den här körningen.
+    selectedTests: [...selectedTests],
+    allTestsSelected: selectedTests.size === ALL_QA_TEST_IDS.length,
   };
 }

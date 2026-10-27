@@ -43,8 +43,12 @@ async function preparePage(page: Page): Promise<void> {
 export async function checkValidation(
   page: Page,
   pages: string[],
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  options: { email?: boolean; phone?: boolean } = {}
 ) {
+
+  const runEmail = options.email !== false;
+  const runPhone = options.phone !== false;
 
   await preparePage(page);
 
@@ -140,7 +144,7 @@ export async function checkValidation(
     "\nEmail validation check:"
   );
 
-  for (const pageUrl of pages) {
+  for (const pageUrl of runEmail ? pages : []) {
 
     // Öppnar sidan.
     await page.goto(pageUrl);
@@ -272,7 +276,7 @@ export async function checkValidation(
     "\nPhone validation check:"
   );
 
-  for (const pageUrl of pages) {
+  for (const pageUrl of runPhone ? pages : []) {
 
     // Öppnar sidan och väntar in formulärskript (maskning,
     // validering) som annars inte hunnit starta.
@@ -651,6 +655,10 @@ export interface PhoneTestResult {
   //   rejected = valideringen stoppade inskicket
   //   unknown  = det gick inte att avgöra
   submission?: "accepted" | "rejected" | "unknown";
+
+  // Om fältet är obligatoriskt. Ett valfritt fält utan validering är
+  // ett mindre problem eftersom besökaren kan lämna det tomt.
+  required?: boolean;
 
   // Förklaring i klartext till rapporten.
   detail: string;
@@ -1932,6 +1940,47 @@ async function runSubmitTest(
 // HUVUDFUNKTION
 // ---------------------------------------------------------
 
+// Avgör om ett fält är obligatoriskt: required-attribut, aria-required
+// eller en markering på fältgruppen (t.ex. Fluent Forms).
+async function isRequiredField(field: Locator): Promise<boolean> {
+
+  return field
+    .evaluate((element) => {
+
+      const input = element as HTMLInputElement;
+
+      if (
+        input.required ||
+        input.getAttribute("aria-required") === "true"
+      ) {
+        return true;
+      }
+
+      const box = input.closest(
+        ".ff-el-group, .q-form, .gfield, .wpforms-field, " +
+          ".elementor-field-group, .form-group, .wpcf7-form-control-wrap"
+      );
+
+      if (!box) return false;
+
+      if (
+        box.matches(
+          ".ff-el-is-required, .is-required, .gfield_contains_required, " +
+            ".wpforms-field-required, .elementor-field-required, .required"
+        ) ||
+        box.querySelector(
+          ".ff-el-is-required, .asterisk-right, .asterisk-left, " +
+            ".gfield_required, .wpforms-required-label, .required"
+        )
+      ) {
+        return true;
+      }
+
+      return false;
+    })
+    .catch(() => false);
+}
+
 // Kör de tre testerna på ett telefonfält. Ett test som kraschar
 // stoppar aldrig övriga tester eller skanningen, utan blir
 // "inconclusive" med orsaken angiven.
@@ -1944,6 +1993,8 @@ export async function testPhoneField(
   await preparePage(page);
 
   const results: PhoneTestResult[] = [];
+
+  const required = await isRequiredField(field);
 
   const run = async (
     test: PhoneTestName,
@@ -1975,6 +2026,7 @@ export async function testPhoneField(
       fieldSelector: context.fieldSelector,
       test,
       testValue,
+      required,
       ...outcome,
     });
   };

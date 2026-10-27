@@ -114,6 +114,244 @@ let csvSitePercentages = [];
 
 
 // =========================================================
+// VAL AV TESTER
+// =========================================================
+
+// Alla tester som kan väljas. Id:n måste matcha servern
+// (QA_TESTS i src/website-scanner.ts).
+const QA_TESTS = [
+    { id: "seo", label: "SEO" },
+    { id: "performance", label: "Prestanda" },
+    { id: "responsive", label: "Responsivitet" },
+    { id: "cookie", label: "Cookie / GDPR" },
+    { id: "security", label: "HTTPS / säkerhet" },
+    { id: "domains", label: "Alternativa domäner" },
+    { id: "similar", label: "Liknande domäner" },
+    { id: "text", label: "Text / stavning" },
+    { id: "links", label: "Länkar" },
+    { id: "images", label: "Bilder" },
+    { id: "forms", label: "Formulär" },
+    { id: "email", label: "E-postvalidering" },
+    { id: "phone", label: "Telefonvalidering" },
+    { id: "navigation", label: "Navigation" },
+    { id: "cta", label: "CTA" },
+    { id: "social", label: "Sociala medier" },
+    { id: "maps", label: "Google Maps" },
+    { id: "gbp", label: "Google Business Profile" },
+    { id: "ai", label: "AI-analys" }
+];
+
+const TEST_SELECTION_KEY = "qaTestSelection";
+
+// Aktuellt val. mode "all" = hela analysen.
+let testSelection = {
+    mode: "all",
+    selected: QA_TESTS.map((test) => test.id)
+};
+
+// Lagring som tål att chrome.storage saknas.
+function loadTestSelection(callback) {
+
+    const apply = (saved) => {
+
+        if (
+            saved &&
+            (saved.mode === "all" || saved.mode === "custom") &&
+            Array.isArray(saved.selected)
+        ) {
+            testSelection = {
+                mode: saved.mode,
+                selected: saved.selected.filter((id) =>
+                    QA_TESTS.some((test) => test.id === id)
+                )
+            };
+        }
+
+        callback();
+    };
+
+    try {
+
+        if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+
+            chrome.storage.local.get(TEST_SELECTION_KEY, (items) => {
+                apply(items ? items[TEST_SELECTION_KEY] : null);
+            });
+
+            return;
+        }
+
+        apply(JSON.parse(localStorage.getItem(TEST_SELECTION_KEY)));
+
+    } catch (error) {
+        apply(null);
+    }
+}
+
+function saveTestSelection() {
+
+    try {
+
+        if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({ [TEST_SELECTION_KEY]: testSelection });
+            return;
+        }
+
+        localStorage.setItem(TEST_SELECTION_KEY, JSON.stringify(testSelection));
+
+    } catch (error) {
+        // Valet används ändå under den här körningen.
+    }
+}
+
+// Vad som skickas till servern. undefined = hela analysen.
+function getSelectedTests() {
+
+    if (testSelection.mode === "all") {
+        return undefined;
+    }
+
+    return testSelection.selected.slice();
+}
+
+// Falskt om läget är Välj tester och inget är valt.
+function hasValidTestSelection() {
+
+    return (
+        testSelection.mode === "all" ||
+        testSelection.selected.length > 0
+    );
+}
+
+function renderTestSelector() {
+
+    const modeAll = document.getElementById("modeAll");
+    const modeCustom = document.getElementById("modeCustom");
+    const picker = document.getElementById("testPicker");
+    const list = document.getElementById("testList");
+    const summary = document.getElementById("testSummary");
+
+    if (!modeAll || !modeCustom || !picker || !list || !summary) {
+        return;
+    }
+
+    const custom = testSelection.mode === "custom";
+
+    modeAll.classList.toggle("active", !custom);
+    modeCustom.classList.toggle("active", custom);
+    modeAll.setAttribute("aria-checked", String(!custom));
+    modeCustom.setAttribute("aria-checked", String(custom));
+
+    picker.hidden = !custom;
+
+    list.innerHTML = "";
+
+    QA_TESTS.forEach((test) => {
+
+        const label = document.createElement("label");
+        label.className = "test-item";
+
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = testSelection.selected.includes(test.id);
+
+        box.addEventListener("change", () => {
+
+            const selected = new Set(testSelection.selected);
+
+            if (box.checked) {
+                selected.add(test.id);
+            } else {
+                selected.delete(test.id);
+            }
+
+            testSelection.selected =
+                QA_TESTS.map((t) => t.id).filter((id) => selected.has(id));
+
+            saveTestSelection();
+            renderTestSummary();
+        });
+
+        const text = document.createElement("span");
+        text.textContent = test.label;
+
+        label.appendChild(box);
+        label.appendChild(text);
+        list.appendChild(label);
+    });
+
+    renderTestSummary();
+}
+
+function renderTestSummary() {
+
+    const summary = document.getElementById("testSummary");
+
+    if (!summary) {
+        return;
+    }
+
+    summary.classList.remove("warn");
+
+    if (testSelection.mode === "all") {
+        summary.textContent = "Alla tester körs.";
+        return;
+    }
+
+    const count = testSelection.selected.length;
+
+    if (count === 0) {
+        summary.textContent = "Välj minst ett test.";
+        summary.classList.add("warn");
+        return;
+    }
+
+    summary.textContent =
+        `${count} av ${QA_TESTS.length} tester körs.`;
+}
+
+function setupTestSelector() {
+
+    const modeAll = document.getElementById("modeAll");
+    const modeCustom = document.getElementById("modeCustom");
+    const selectAll = document.getElementById("selectAllTests");
+    const clearAll = document.getElementById("clearAllTests");
+
+    if (!modeAll || !modeCustom) {
+        return;
+    }
+
+    modeAll.addEventListener("click", () => {
+        testSelection.mode = "all";
+        saveTestSelection();
+        renderTestSelector();
+    });
+
+    modeCustom.addEventListener("click", () => {
+        testSelection.mode = "custom";
+        saveTestSelection();
+        renderTestSelector();
+    });
+
+    selectAll.addEventListener("click", () => {
+        testSelection.selected = QA_TESTS.map((test) => test.id);
+        saveTestSelection();
+        renderTestSelector();
+    });
+
+    clearAll.addEventListener("click", () => {
+        testSelection.selected = [];
+        saveTestSelection();
+        renderTestSelector();
+    });
+
+    loadTestSelection(renderTestSelector);
+}
+
+setupTestSelector();
+
+
+// =========================================================
 // FILTYPER
 // =========================================================
 
@@ -1546,6 +1784,16 @@ startButton.addEventListener(
             return;
         }
 
+        // Kontrollera att minst ett test är valt.
+        if (!hasValidTestSelection()) {
+
+            setStatus(
+                "Välj minst ett test."
+            );
+
+            return;
+        }
+
         // Rensa gamla resultat.
         resultsElement.innerHTML =
             "";
@@ -1586,7 +1834,8 @@ startButton.addEventListener(
                         },
 
                         body: JSON.stringify({
-                            url: url
+                            url: url,
+                            tests: getSelectedTests()
                         })
                     }
                 );
@@ -1853,6 +2102,16 @@ csvScanButton.addEventListener(
             return;
         }
 
+        // Kontrollera att minst ett test är valt.
+        if (!hasValidTestSelection()) {
+
+            setStatus(
+                "Välj minst ett test."
+            );
+
+            return;
+        }
+
         // Hämta filen.
         const file =
             csvFileInput.files[0];
@@ -1952,7 +2211,8 @@ csvScanButton.addEventListener(
                             },
 
                             body: JSON.stringify({
-                                urls: urls
+                                urls: urls,
+                                tests: getSelectedTests()
                             })
                         }
                     );

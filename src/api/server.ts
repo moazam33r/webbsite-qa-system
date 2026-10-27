@@ -115,7 +115,7 @@ app.post(
     async (req, res) => {
 
         // Hämtar URL från requesten.
-        const { url } = req.body;
+        const { url, tests } = req.body;
 
         // Kontrollerar att URL finns.
         if (
@@ -157,7 +157,9 @@ app.post(
             // Kör hela QA-systemet.
             const result = await scanWebsite(
                 page,
-                websiteUrl
+                websiteUrl,
+                undefined,
+                { tests }
             );
 
             // Skapar PDF för webbplatsen.
@@ -165,6 +167,8 @@ app.post(
                 websiteUrl: result.url,
                 results: result.results,
                 aiAnalysis: result.aiAnalysis,
+                selectedTests: result.selectedTests,
+                allTestsSelected: result.allTestsSelected,
             });
 
             // Hämtar endast PDF-filens namn.
@@ -241,7 +245,7 @@ app.post(
     async (req, res) => {
 
         // Hämtar URL från requesten.
-        const { url } = req.body;
+        const { url, tests } = req.body;
 
         // =====================================================
         // VALIDERING
@@ -399,7 +403,8 @@ app.post(
                         overallPercentage,
                         message
                     );
-                }
+                },
+                { tests }
             );
 
 
@@ -426,6 +431,8 @@ app.post(
                     websiteUrl: result.url,
                     results: result.results,
                     aiAnalysis: result.aiAnalysis,
+                    selectedTests: result.selectedTests,
+                    allTestsSelected: result.allTestsSelected,
                 });
 
             // Hämtar PDF-filens namn.
@@ -522,7 +529,7 @@ app.post(
     async (req, res) => {
 
         // Hämtar URL-listan.
-        const { urls } = req.body;
+        const { urls, tests } = req.body;
 
         // Kontrollerar att urls är en array.
         if (!Array.isArray(urls)) {
@@ -588,7 +595,9 @@ app.post(
                     const result =
                         await scanWebsite(
                             page,
-                            websiteUrl
+                            websiteUrl,
+                            undefined,
+                            { tests }
                         );
 
                     // Sparar resultatet.
@@ -600,6 +609,10 @@ app.post(
                             result.results,
                         aiAnalysis:
                             result.aiAnalysis,
+                        selectedTests:
+                            result.selectedTests,
+                        allTestsSelected:
+                            result.allTestsSelected,
                     });
 
                 } catch (error) {
@@ -712,7 +725,7 @@ app.post(
     async (req, res) => {
 
         // Hämtar URL-listan.
-        const { urls } = req.body;
+        const { urls, tests } = req.body;
 
 
         // =====================================================
@@ -984,7 +997,8 @@ app.post(
                                     sitePercentage,
                                     message
                                 );
-                            }
+                            },
+                            { tests }
                         );
 
 
@@ -997,6 +1011,10 @@ app.post(
                             result.results,
                         aiAnalysis:
                             result.aiAnalysis,
+                        selectedTests:
+                            result.selectedTests,
+                        allTestsSelected:
+                            result.allTestsSelected,
                     });
 
                 } catch (error) {

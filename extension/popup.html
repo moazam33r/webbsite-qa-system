@@ -54,6 +54,76 @@
 
 
     <!-- ================================= -->
+    <!-- VAL AV TESTER -->
+    <!-- ================================= -->
+
+    <section class="card" id="testSelector">
+
+      <div class="section-header">
+        <div>
+          <span class="section-label">
+            TESTER
+          </span>
+
+          <h2>
+            Vad ska testas?
+          </h2>
+        </div>
+      </div>
+
+      <!-- Hela analysen eller egna val -->
+      <div class="mode-switch" role="radiogroup" aria-label="Val av tester">
+
+        <button
+          id="modeAll"
+          class="mode-option active"
+          type="button"
+          role="radio"
+          aria-checked="true"
+        >
+          Hela QA-analysen
+        </button>
+
+        <button
+          id="modeCustom"
+          class="mode-option"
+          type="button"
+          role="radio"
+          aria-checked="false"
+        >
+          Välj tester
+        </button>
+
+      </div>
+
+      <p id="testSummary" class="test-summary">
+        Alla tester körs.
+      </p>
+
+      <!-- Checklista (visas bara i läget Välj tester) -->
+      <div id="testPicker" class="test-picker" hidden>
+
+        <div class="test-picker-actions">
+          <button id="selectAllTests" class="link-button" type="button">
+            Markera alla
+          </button>
+          <button id="clearAllTests" class="link-button" type="button">
+            Rensa
+          </button>
+        </div>
+
+        <div id="testList" class="test-list"></div>
+
+        <p class="test-note">
+          Sidor och länkstruktur hämtas alltid, eftersom övriga tester behöver dem.
+        </p>
+
+      </div>
+
+    </section>
+
+
+    <!-- ================================= -->
     <!-- URL SCAN -->
     <!-- ================================= -->
 
