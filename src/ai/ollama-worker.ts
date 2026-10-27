@@ -172,7 +172,7 @@ const body = JSON.stringify({
   think: false,
   ...(isTextReview ? { format: "json" } : {}),
   options: {
-    num_predict: isTextReview ? 2600 : 1200,
+    num_predict: isTextReview ? 2600 : 2500,
     temperature: 0.1,
   },
 });

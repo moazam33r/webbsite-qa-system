@@ -1,277 +1,238 @@
+
 import { Page } from "@playwright/test";
 
-// Kontrollerar grundläggande SEO på alla sidor på webbplatsen
+// Kontrollerar grundläggande SEO på alla sidor på webbplatsen.
+// Skiljer mellan viktiga förbättringar, mindre rekommendationer
+// och resultat som behöver granskas manuellt.
+
 export async function checkSEO(
   page: Page,
   pages: string[]
 ) {
-
-  // Sparar godkända SEO-kontroller
+  // Godkända kontroller.
   const passed: string[] = [];
 
-  // Sparar SEO-problem som bör förbättras
+  // Viktiga SEO- och tillgänglighetsförbättringar.
+  // Dessa bör granskas och prioriteras.
   const warnings: string[] = [];
 
-  // Sparar tekniska fel där kontrollen inte kunde genomföras
+  // Mindre rekommendationer som inte automatiskt är fel.
+  const recommendations: string[] = [];
+
+  // Fynd som inte säkert kan klassificeras som problem.
+  const manualReview: string[] = [];
+
+  // Tekniska fel där kontrollen inte kunde genomföras.
   const failed: string[] = [];
 
-  // Används för att undvika att samma sida kontrolleras flera gånger
+  // Undviker att samma URL kontrolleras flera gånger.
   const checkedPages = new Set<string>();
 
-  // Går igenom alla sidor som hittades av webbplatsens crawler
   for (const url of pages) {
-
-    // Hoppar över sidan om den redan har kontrollerats
     if (checkedPages.has(url)) {
       continue;
     }
 
-    // Markerar sidan som kontrollerad
     checkedPages.add(url);
 
     try {
+      // Öppnar sidan och väntar på att HTML-dokumentet laddas.
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      });
 
-      // Öppnar sidan och väntar tills HTML-dokumentet har laddats
-      await page.goto(
-        url,
-        {
-          waitUntil: "domcontentloaded",
-          timeout: 30000,
-        }
-      );
+      // -----------------------------------------------------
+      // TITLE
+      // -----------------------------------------------------
 
-      // Hämtar sidans title
       const title = await page.title();
 
-      // Kontrollerar att sidan har en title
       if (title.trim()) {
-
-        passed.push(
-          `${url} - Title found`
-        );
-
+        passed.push(`${url} - Title found`);
       } else {
-
-        // Saknad title är en SEO-varning
-        warnings.push(
-          `${url} - Title missing`
-        );
+        warnings.push(`${url} - Title missing`);
       }
 
-      // Hittar meta description på sidan
-      const descriptionLocator =
-        page.locator(
-          'meta[name="description"]'
-        );
+      // -----------------------------------------------------
+      // META DESCRIPTION
+      // -----------------------------------------------------
 
-      // Räknar hur många meta descriptions som finns
-      const descriptionCount =
-        await descriptionLocator.count();
+      const descriptions = page.locator(
+        'meta[name="description"]'
+      );
 
-      // Om ingen meta description finns registreras en varning
+      const descriptionCount = await descriptions.count();
+
       if (descriptionCount === 0) {
-
-        warnings.push(
+        recommendations.push(
           `${url} - Meta description missing`
         );
-
       } else {
+        const description = await descriptions
+          .first()
+          .getAttribute("content");
 
-        // Hämtar innehållet från den första meta description
-        const description =
-          await descriptionLocator
-            .first()
-            .getAttribute("content");
-
-        // Kontrollerar att meta description faktiskt innehåller text
         if (description?.trim()) {
+          passed.push(`${url} - Meta description found`);
 
-          passed.push(
-            `${url} - Meta description found`
-          );
-
+          // Flera meta descriptions kan skapa oklarhet.
+          if (descriptionCount > 1) {
+            manualReview.push(
+              `${url} - Multiple meta descriptions found (${descriptionCount})`
+            );
+          }
         } else {
-
-          warnings.push(
-            `${url} - Meta description missing`
+          recommendations.push(
+            `${url} - Meta description is empty`
           );
         }
       }
 
-      // Hämtar alla H1-rubriker på sidan
-      const h1Elements =
-        await page.locator("h1").all();
+      // -----------------------------------------------------
+      // H1-RUBRIKER
+      // -----------------------------------------------------
 
-      // Kontrollerar antalet H1-rubriker
-      if (h1Elements.length === 1) {
+      const h1Elements = page.locator("h1");
+      const h1Count = await h1Elements.count();
 
-        // Hämtar texten från sidans H1
-        const h1Text =
-          await h1Elements[0].innerText();
+      if (h1Count === 0) {
+        warnings.push(`${url} - H1 missing`);
+      } else if (h1Count === 1) {
+        const h1Text = await h1Elements.first().innerText();
 
-        // Kontrollerar att H1-rubriken inte är tom
         if (h1Text.trim()) {
-
-          passed.push(
-            `${url} - Exactly one H1 found`
-          );
-
+          passed.push(`${url} - One non-empty H1 found`);
         } else {
-
-          warnings.push(
-            `${url} - H1 exists but is empty`
-          );
+          warnings.push(`${url} - H1 exists but is empty`);
         }
-
-      } else if (h1Elements.length === 0) {
-
-        // En sida utan H1 registreras som en SEO-varning
-        warnings.push(
-          `${url} - H1 missing`
-        );
-
       } else {
-
-        // Flera H1 kan förekomma på en sida,
-        // därför registreras detta som en varning istället för ett fel
-        warnings.push(
-          `${url} - Multiple H1 tags found (${h1Elements.length})`
+        // Flera H1 är inte automatiskt ett fel.
+        // HTML och sidans struktur behöver granskas i sitt sammanhang.
+        manualReview.push(
+          `${url} - Multiple H1 tags found (${h1Count}); manual review recommended`
         );
       }
 
-      // Hämtar alla bilder på sidan
-      const images =
-        await page.locator("img").all();
+      // -----------------------------------------------------
+      // BILDER OCH ALT-ATTRIBUT
+      // -----------------------------------------------------
 
-      // Räknar bilder som saknar alt-attribut
+      const images = page.locator("img");
+      const imageCount = await images.count();
+
       let imagesWithoutAlt = 0;
 
-      // Går igenom varje bild
-      for (const image of images) {
+      for (let i = 0; i < imageCount; i++) {
+        const image = images.nth(i);
+        const alt = await image.getAttribute("alt");
 
-        // Hämtar bildens alt-attribut
-        const alt =
-          await image.getAttribute("alt");
-
-        // Om alt-attributet saknas räknas bilden
+        // Ett tomt alt-attribut kan vara korrekt för dekorativa
+        // bilder. Vi räknar därför bara saknade attribut.
         if (alt === null) {
           imagesWithoutAlt++;
         }
       }
 
-      // Kontrollerar om alla bilder har alt-attribut
       if (imagesWithoutAlt === 0) {
-
-        passed.push(
-          `${url} - All images have alt attributes`
-        );
-
+        passed.push(`${url} - All images have alt attributes`);
       } else {
-
-        // Saknade alt-attribut registreras som en SEO-varning
         warnings.push(
           `${url} - ${imagesWithoutAlt} images are missing alt attributes`
         );
       }
 
-      // Hittar canonical-länken på sidan
-      const canonicalLocator =
-        page.locator(
-          'link[rel="canonical"]'
-        );
+      // -----------------------------------------------------
+      // CANONICAL
+      // -----------------------------------------------------
 
-      // Räknar hur många canonical-länkar som finns
-      const canonicalCount =
-        await canonicalLocator.count();
+      const canonicalLinks = page.locator(
+        'link[rel="canonical"]'
+      );
 
-      // Om canonical saknas registreras en varning
+      const canonicalCount = await canonicalLinks.count();
+
       if (canonicalCount === 0) {
-
-        warnings.push(
-          `${url} - Canonical missing`
+        // Canonical behövs inte nödvändigtvis på varje sida.
+        recommendations.push(
+          `${url} - Canonical missing; check whether one is needed`
         );
-
       } else {
+        const canonical = await canonicalLinks
+          .first()
+          .getAttribute("href");
 
-        // Hämtar adressen från canonical-länken
-        const canonical =
-          await canonicalLocator
-            .first()
-            .getAttribute("href");
-
-        // Kontrollerar att canonical innehåller en adress
         if (canonical?.trim()) {
+          passed.push(`${url} - Canonical found`);
 
-          passed.push(
-            `${url} - Canonical found`
-          );
-
+          if (canonicalCount > 1) {
+            manualReview.push(
+              `${url} - Multiple canonical links found (${canonicalCount})`
+            );
+          }
         } else {
-
-          warnings.push(
-            `${url} - Canonical missing`
-          );
+          warnings.push(`${url} - Canonical exists but has no URL`);
         }
       }
-
     } catch (error) {
-
-      // Om sidan inte kan kontrolleras registreras ett tekniskt fel
+      // Ett tekniskt kontrollfel är inte samma sak som
+      // ett bekräftat SEO-problem på sidan.
       failed.push(
         `${url} - SEO check could not be completed`
       );
 
-      // Skriver ut felet i terminalen för felsökning
-      console.log(
-        `⚠ SEO error on ${url}`,
-        error
-      );
+      console.log(`SEO check error on ${url}:`, error);
     }
   }
 
-  // Skriver ut sammanfattningen av SEO-kontrollen
+  // -------------------------------------------------------
+  // SAMMANFATTNING
+  // -------------------------------------------------------
+
   console.log("\nSEO RESULTS");
+  console.log(`Passed: ${passed.length}`);
+  console.log(`Important improvements: ${warnings.length}`);
+  console.log(`Recommendations: ${recommendations.length}`);
+  console.log(`Manual review: ${manualReview.length}`);
+  console.log(`Technical errors: ${failed.length}`);
 
-  // Visar antal godkända kontroller
-  console.log(
-    `✓ Passed: ${passed.length}`
-  );
-
-  // Visar antal varningar
-  console.log(
-    `⚠ Warnings: ${warnings.length}`
-  );
-
-  // Visar antal tekniska fel
-  console.log(
-    `✗ Technical errors: ${failed.length}`
-  );
-
-  // Visar alla SEO-varningar om det finns några
   if (warnings.length > 0) {
-
-    console.log("\nSEO WARNINGS:");
+    console.log("\nSEO IMPROVEMENTS:");
 
     warnings.forEach((warning) => {
       console.log("-", warning);
     });
   }
 
-  // Visar alla tekniska SEO-fel om det finns några
-  if (failed.length > 0) {
+  if (recommendations.length > 0) {
+    console.log("\nSEO RECOMMENDATIONS:");
 
-    console.log("\nSEO ERRORS:");
+    recommendations.forEach((recommendation) => {
+      console.log("-", recommendation);
+    });
+  }
+
+  if (manualReview.length > 0) {
+    console.log("\nSEO NEEDS MANUAL REVIEW:");
+
+    manualReview.forEach((item) => {
+      console.log("-", item);
+    });
+  }
+
+  if (failed.length > 0) {
+    console.log("\nSEO TECHNICAL ERRORS:");
 
     failed.forEach((error) => {
       console.log("-", error);
     });
   }
 
-  // Returnerar resultaten så att website-scanner.ts
-  // kan använda dem i den slutliga QA-rapporten
   return {
     passed,
     warnings,
+    recommendations,
+    manualReview,
     failed,
   };
 }

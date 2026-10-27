@@ -370,9 +370,6 @@ function getAction(
     );
 }
 
-// ============================================================
-// SEO-FYND
-// ============================================================
 
 function describeSeoIssue(issue: string): {
     title: string;
@@ -381,10 +378,12 @@ function describeSeoIssue(issue: string): {
 } {
     if (/meta description/i.test(issue)) {
         return {
-            title: "Meta description saknas",
+            title: /empty/i.test(issue)
+                ? "Meta description är tom"
+                : "Meta description saknas",
             description:
-                "Sökmotorer kan då välja en annan text från sidan som beskrivning i sökresultatet.",
-            priority: "Viktig",
+                "En relevant metabeskrivning kan förbättra presentationen i sökresultaten.",
+            priority: "Liten",
         };
     }
 
@@ -396,16 +395,25 @@ function describeSeoIssue(issue: string): {
                 ? `Flera H1-rubriker (${count})`
                 : "Flera H1-rubriker",
             description:
-                "Kontrollera rubrikhierarkin så att sidans huvudrubrik och underrubriker har en tydlig struktur.",
+                "Granska rubrikstrukturen manuellt. Flera H1-rubriker är inte automatiskt ett fel.",
             priority: "Liten",
         };
     }
 
-    if (/(missing|no).*h1|h1.*missing/i.test(issue)) {
+    if (/manual review|manuell granskning|requires manual/i.test(issue)) {
         return {
-            title: "H1-rubrik saknas",
+            title: "SEO-fynd kräver manuell granskning",
             description:
-                "En tydlig huvudrubrik hjälper besökare och sökmotorer att förstå sidans innehåll.",
+                "Automatisk kontroll kan inte avgöra om detta är ett faktiskt problem.",
+            priority: "Liten",
+        };
+    }
+
+    if (/(missing|no).*h1|h1.*missing|h1 exists but is empty/i.test(issue)) {
+        return {
+            title: "H1-rubrik saknas eller är tom",
+            description:
+                "Kontrollera att sidan har en tydlig och beskrivande huvudrubrik.",
             priority: "Viktig",
         };
     }
@@ -414,14 +422,41 @@ function describeSeoIssue(issue: string): {
         return {
             title: "Sidtitel saknas",
             description:
-                "En relevant sidtitel hjälper användare och sökmotorer att förstå sidans innehåll.",
+                "En beskrivande sidtitel hjälper användare och sökmotorer att förstå sidans innehåll.",
+            priority: "Viktig",
+        };
+    }
+
+    if (/canonical missing/i.test(issue)) {
+        return {
+            title: "Canonical saknas",
+            description:
+                "Kontrollera om sidan behöver en canonical-länk utifrån webbplatsens URL-struktur.",
+            priority: "Liten",
+        };
+    }
+
+    if (/canonical exists but has no url/i.test(issue)) {
+        return {
+            title: "Canonical saknar adress",
+            description:
+                "Kontrollera canonical-länkens href-attribut.",
+            priority: "Viktig",
+        };
+    }
+
+    if (/images are missing alt/i.test(issue)) {
+        return {
+            title: "Bilder saknar alt-attribut",
+            description:
+                "Kontrollera om bilderna behöver alternativtext för tillgänglighet.",
             priority: "Viktig",
         };
     }
 
     return {
         title: issue,
-        priority: "Viktig",
+        priority: "Liten",
     };
 }
 
@@ -429,30 +464,39 @@ function parseSeoFindings(result: QACheckResult): Finding[] {
     const message = cleanMessage(result.message);
     const findings: Finding[] = [];
 
-    // Förväntat format:
-    // URL - problem - URL - problem
-    const parts = message.split(/\s+-\s+/);
+    // Läs SEO-fynd som innehåller en URL följd av en beskrivning.
+    // Stödjer även sammanfattningar från den nya SEO-kontrollen.
+    const lines = message
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
 
     const groups = new Map<string, string[]>();
 
-    for (let i = 0; i < parts.length - 1; i++) {
-        const current = parts[i].trim();
-
-        if (!/^https?:\/\//i.test(current)) {
+    for (const line of lines) {
+        // Hoppa över kategorirubriker och sammanfattningar.
+        if (
+            /^(viktiga förbättringar|mindre rekommendationer|kräver manuell granskning|tekniska kontrollfel|seo-kontrollen|inga viktiga seo-problem|seo-kontroller godkända)/i.test(
+                line
+            )
+        ) {
             continue;
         }
 
-        const next = parts[i + 1]?.trim();
+        const match = line.match(
+            /^-?\s*(https?:\/\/\S+?)\s+-\s+(.+)$/
+        );
 
-        if (!next || /^https?:\/\//i.test(next)) {
+        if (!match) {
             continue;
         }
 
-        const pages = groups.get(next) ?? [];
-        pages.push(current);
+        const pageUrl = match[1];
+        const issue = match[2].trim();
+        const pages = groups.get(issue) ?? [];
 
-        groups.set(next, pages);
-        i++;
+        pages.push(pageUrl);
+        groups.set(issue, pages);
     }
 
     for (const [issue, pages] of groups) {
@@ -800,18 +844,26 @@ function buildGenericFinding(result: QACheckResult): Finding {
 function deriveFindings(results: QACheckResult[]): Finding[] {
     const findings: Finding[] = [];
 
-    for (const result of results) {
-        if (result.status === "PASS") continue;
+   
+for (const result of results) {
+    const isSeoResult = /seo/i.test(result.name);
 
-        let derived: Finding[] = [];
+    // SEO kan innehålla mindre rekommendationer även vid PASS.
+    // Övriga godkända kontroller ska fortsatt hoppas över.
+    if (result.status === "PASS" && !isSeoResult) continue;
 
-        if (/seo/i.test(result.name)) {
-            derived = parseSeoFindings(result);
-        } else if (/länk/i.test(result.name)) {
-            derived = parseLinkFindings(result);
-        } else if (/text|stavning/i.test(result.name)) {
-            derived = parseTextFindings(result);
-        }
+    let derived: Finding[] = [];
+
+    if (isSeoResult) {
+        derived = parseSeoFindings(result);
+    } else if (/länk/i.test(result.name)) {
+        derived = parseLinkFindings(result);
+    } else if (/text|stavning/i.test(result.name)) {
+        derived = parseTextFindings(result);
+    }
+if (isSeoResult && result.status === "PASS" && derived.length === 0) {
+    continue;
+}
 
         if (derived.length === 0) {
     // Om textfynd har lästs och alla bedömts som korrekta

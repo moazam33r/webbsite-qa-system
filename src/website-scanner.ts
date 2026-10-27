@@ -5,7 +5,7 @@ import { checkLinks } from "./checks/links";
 import { checkSocialMedia } from "./checks/social-media";
 import { checkImages } from "./checks/images";
 import { checkForms } from "./checks/forms";
-import { checkValidation } from "./checks/validation";
+import { checkValidation, PHONE_TEST_LABELS } from "./checks/validation";
 import { checkNavigation } from "./checks/navigation";
 import { checkGoogleMaps } from "./checks/google-maps";
 import { checkGoogleBusinessProfile } from "./checks/google-business-profile";
@@ -202,59 +202,79 @@ export async function scanWebsite(
   );
 
 
-  // =======================================================
-  // 2. SEO
-  // =======================================================
-
-  console.log("\n--- SEO ---");
-
-  reportProgress(
-    32,
-    "Analyserar SEO..."
-  );
-
+ 
   const seoResult = await checkSEO(
     page,
     pages
   );
 
+  // Skiljer mellan viktiga förbättringar, rekommendationer,
+  // manuell granskning och tekniska kontrollfel.
+  const seoDetails: string[] = [];
+
+  if (seoResult.warnings.length > 0) {
+    seoDetails.push(
+      `Viktiga förbättringar (${seoResult.warnings.length}):`,
+      ...seoResult.warnings.map((item) => `- ${item}`)
+    );
+  }
+
+  if (seoResult.recommendations.length > 0) {
+    seoDetails.push(
+      `Mindre rekommendationer (${seoResult.recommendations.length}):`,
+      ...seoResult.recommendations.map((item) => `- ${item}`)
+    );
+  }
+
+  if (seoResult.manualReview.length > 0) {
+    seoDetails.push(
+      `Kräver manuell granskning (${seoResult.manualReview.length}):`,
+      ...seoResult.manualReview.map((item) => `- ${item}`)
+    );
+  }
+
   if (seoResult.failed.length > 0) {
+    seoDetails.push(
+      `Tekniska kontrollfel (${seoResult.failed.length}):`,
+      ...seoResult.failed.map((item) => `- ${item}`)
+    );
+  }
 
-    const seoDetails =
-      seoResult.failed
-        .map((error) => `- ${error}`)
-        .join("\n");
-
-    results.push({
-      name: "SEO",
-      status: "FAIL",
-      message:
-        `${seoResult.failed.length} tekniska SEO-fel hittades\n` +
-        seoDetails,
-    });
-
-  } else if (seoResult.warnings.length > 0) {
-
-    const seoDetails =
-      seoResult.warnings
-        .map((warning) => `- ${warning}`)
-        .join("\n");
-
+ 
+  // Tekniska kontrollfel och viktiga förbättringar ger WARNING.
+  if (
+    seoResult.failed.length > 0 ||
+    seoResult.warnings.length > 0
+  ) {
     results.push({
       name: "SEO",
       status: "WARNING",
       message:
-        `${seoResult.warnings.length} SEO-varningar hittades\n` +
-        seoDetails,
+        seoResult.failed.length > 0
+          ? "SEO-kontrollen kunde inte slutföras på alla sidor.\n" +
+            seoDetails.join("\n")
+          : `${seoResult.warnings.length} viktiga SEO-förbättringar hittades.\n` +
+            seoDetails.join("\n"),
     });
-
-  } else {
-
+  } else if (
+    seoResult.recommendations.length > 0 ||
+    seoResult.manualReview.length > 0
+  ) {
     results.push({
       name: "SEO",
       status: "PASS",
       message:
-        `${seoResult.passed.length} SEO-kontroller godkända`,
+        "Inga viktiga SEO-problem identifierades. " +
+        "Mindre rekommendationer och fynd för manuell granskning finns nedan.\n" +
+        seoDetails.join("\n"),
+    });
+  } else {
+    results.push({
+      name: "SEO",
+      status: "PASS",
+      message:
+        `${seoResult.passed.length} SEO-kontroller godkända. ` +
+        "Inga ytterligare SEO-fynd.",
     });
   }
 
@@ -1457,33 +1477,82 @@ const main: HTMLElement | null =
     }
   );
 
-  if (validationResult.emailFailed > 0) {
+  // Rapporterar e-postvalidering separat.
+if (validationResult.emailFailed > 0) {
+  results.push({
+    name: "E-postvalidering",
+    status: "FAIL",
+    message: `${validationResult.emailFailed} e-postfält accepterar ogiltig e-post.`,
+  });
+} else {
+  results.push({
+    name: "E-postvalidering",
+    status: "PASS",
+    message: "Ingen ogiltig e-post accepterades av den kontrollerade HTML-valideringen.",
+  });
+}
 
+// Rapporterar telefonvalidering separat.
+{
+  const tests = validationResult.phoneTests;
+
+  const failed = tests.filter((t) => t.status === "failed");
+  const inconclusive = tests.filter((t) => t.status === "inconclusive");
+  const passed = tests.filter((t) => t.status === "passed");
+
+  const describe = (t: (typeof tests)[number]) =>
+    `- Sida: ${t.pageUrl}\n` +
+    `  Fält: ${t.fieldName}\n` +
+    `  Kontroll: ${PHONE_TEST_LABELS[t.test]}\n` +
+    `  Testvärde: ${t.testValue}\n` +
+    `  Resultat: ${t.detail}`;
+
+  if (tests.length === 0) {
     results.push({
-      name: "Validering",
-      status: "FAIL",
-      message:
-        `${validationResult.emailFailed} e-postfält accepterar ogiltig e-post`,
-    });
-
-  } else if (validationResult.phoneFailed > 0) {
-
-    results.push({
-      name: "Validering",
-      status: "WARNING",
-      message:
-        `${validationResult.phoneFailed} telefonfält saknar client-side validering`,
-    });
-
-  } else {
-
-    results.push({
-      name: "Validering",
+      name: "Telefonvalidering",
       status: "PASS",
-      message:
-        "Formulärvalidering fungerar",
+      message: "Inga telefonfält hittades att testa.",
+    });
+  } else {
+    const sections: string[] = [
+      `${passed.length} godkända, ${failed.length} underkända, ` +
+        `${inconclusive.length} kunde inte avgöras`,
+    ];
+
+    if (failed.length > 0) {
+      sections.push(
+        "UNDERKÄNDA KONTROLLER\n\n" + failed.map(describe).join("\n\n")
+      );
+    }
+
+    if (inconclusive.length > 0) {
+      sections.push(
+        "KUNDE INTE AVGÖRAS – KONTROLLERA MANUELLT\n\n" +
+          inconclusive.map(describe).join("\n\n")
+      );
+    }
+
+    if (passed.length > 0) {
+      sections.push(
+        "GODKÄNDA KONTROLLER\n\n" +
+          passed
+            .map(
+              (t) =>
+                `- ${t.pageUrl} (${t.fieldName}): ${PHONE_TEST_LABELS[t.test]}`
+            )
+            .join("\n")
+      );
+    }
+
+    results.push({
+      name: "Telefonvalidering",
+      // Underkänt eller oavgjort ska aldrig se ut som godkänt.
+      status:
+        failed.length > 0 || inconclusive.length > 0 ? "WARNING" : "PASS",
+      message: sections.join("\n\n"),
     });
   }
+}
 
 
   // =======================================================
@@ -1539,27 +1608,70 @@ const main: HTMLElement | null =
     pages
   );
 
-  if (ctaResult.failed === 0) {
+  const ctaLines = (
+    items: {
+      text: string;
+      url: string;
+      reason: string;
+      pages: string[];
+    }[]
+  ) =>
+    items
+      .map(
+        (item) =>
+          `- Knapp/länk: "${item.text || "utan text"}"\n` +
+          `  Destination: ${item.url}\n` +
+          `  Orsak: ${item.reason}\n` +
+          `  Finns på: ${item.pages.slice(0, 3).join(", ")}` +
+          (item.pages.length > 3
+            ? ` och ${item.pages.length - 3} sidor till`
+            : "")
+      )
+      .join("\n\n");
+
+  if (ctaResult.failed > 0) {
 
     results.push({
       name: "CTA",
-      status: "PASS",
+      status: "FAIL",
       message:
-        `${ctaResult.passed} CTA-länkar fungerar`,
+        `${ctaResult.failed} CTA-destinationer är bekräftat trasiga. ` +
+        `${ctaResult.passed} fungerar` +
+        (ctaResult.unverified > 0
+          ? `, ${ctaResult.unverified} kunde inte verifieras automatiskt`
+          : "") +
+        `.\n\nTRASIGA CTA-LÄNKAR\n\n` +
+        ctaLines(ctaResult.failures) +
+        (ctaResult.unverified > 0
+          ? `\n\nKUNDE INTE VERIFIERAS – KONTROLLERA MANUELLT\n\n` +
+            ctaLines(ctaResult.unverifiedLinks)
+          : ""),
+    });
+
+  } else if (ctaResult.unverified > 0) {
+
+    results.push({
+      name: "CTA",
+      status: "WARNING",
+      message:
+        `${ctaResult.passed} CTA-destinationer fungerar. ` +
+        `${ctaResult.unverified} kunde inte verifieras automatiskt och bör ` +
+        `kontrolleras manuellt. Inga bekräftat trasiga CTA-länkar.\n\n` +
+        `KUNDE INTE VERIFIERAS – KONTROLLERA MANUELLT\n\n` +
+        ctaLines(ctaResult.unverifiedLinks),
     });
 
   } else {
 
     results.push({
       name: "CTA",
-      status: "FAIL",
+      status: "PASS",
       message:
-        `${ctaResult.failed} CTA-länkar fungerar inte`,
+        `${ctaResult.passed} CTA-destinationer fungerar`,
     });
   }
 
 
- 
   // =======================================================
   // 17. SOCIALA MEDIER
   // =======================================================
