@@ -45,6 +45,7 @@ export async function checkSocialMedia(
   const matched: {
     platform: string;
     url: string;
+    reason: string;
   }[] = [];
 
   // Sparar sociala medier som inte går att verifiera automatiskt,
@@ -85,6 +86,13 @@ export async function checkSocialMedia(
 
   // Extra företagsnamn som hittas på startsidan.
   let pageCompanyNames: string[] = [];
+
+  // Telefonnummer och e-postadresser som webbplatsen själv visar.
+  // Används för att styrka kopplingen till en profil.
+  let siteContacts: { phones: string[]; emails: string[] } = {
+    phones: [],
+    emails: [],
+  };
 
   try {
 
@@ -172,6 +180,15 @@ export async function checkSocialMedia(
 
       return names;
     });
+
+    siteContacts = await page.evaluate(() => ({
+      phones: Array.from(
+        document.querySelectorAll('a[href^="tel:"]')
+      ).map((a) => a.getAttribute("href") || ""),
+      emails: Array.from(
+        document.querySelectorAll('a[href^="mailto:"]')
+      ).map((a) => a.getAttribute("href") || ""),
+    }));
 
   } catch {
 
@@ -475,52 +492,192 @@ export async function checkSocialMedia(
     return false;
   };
 
-  // Försöker läsa profilens namn genom att öppna profilsidan.
-  // Används när URL:en bara innehåller ett ID (t.ex. Facebook
-  // profile.php?id=...). Returnerar tom text om namnet inte
-  // går att läsa (inloggningsvägg, blockering, fel).
-  const readProfileName = async (
+  // Sista 8 siffrorna i ett telefonnummer. Gör att "0763 48 87 32",
+  // "+46 76 348 87 32" och "0763488732" jämförs lika.
+  const phoneKey = (value: string): string =>
+    value.replace(/\D/g, "").slice(-8);
+
+  const sitePhoneKeys = [
+    ...new Set(
+      siteContacts.phones
+        .map((phone) => phoneKey(decodeURIComponent(phone)))
+        .filter((key) => key.length === 8)
+    ),
+  ];
+
+  const siteEmails = [
+    ...new Set(
+      siteContacts.emails
+        .map((mail) =>
+          decodeURIComponent(mail)
+            .replace(/^mailto:/i, "")
+            .split("?")[0]
+            .trim()
+            .toLowerCase()
+        )
+        .filter((mail) => mail.includes("@"))
+    ),
+  ];
+
+  // Länkar för att dela en sida eller visa ett inbäddat flöde är inga
+  // företagsprofiler.
+  const isShareOrWidgetUrl = (value: string): boolean =>
+    /\/(sharer|share|intent|dialog|plugins|embed|tr)(\/|\.php|\?|$)/i.test(
+      new URL(value).pathname + new URL(value).search
+    );
+
+  // Vad vi kunde läsa ut från profilsidan.
+  interface ProfileEvidence {
+    // Profilen gick att läsa (ingen inloggningsvägg eller blockering).
+    readable: boolean;
+    // HTTP-status för profilsidan (0 = ingen kontakt).
+    httpStatus: number;
+    // Profilens namn, om det gick att läsa.
+    name: string;
+    // Profilen länkar tillbaka till webbplatsen.
+    backlink: boolean;
+    // Webbplatsens telefonnummer eller e-post finns på profilen.
+    contact: string;
+    // Företagets namn nämns på profilen.
+    nameMentioned: boolean;
+  }
+
+  // Öppnar profilsidan och letar efter bevis för att den hör till
+  // företaget: länk tillbaka, samma telefonnummer eller e-post, eller
+  // företagsnamnet.
+  const readProfile = async (
     profileUrl: string
-  ): Promise<string> => {
+  ): Promise<ProfileEvidence> => {
+
+    const empty: ProfileEvidence = {
+      readable: false,
+      httpStatus: 0,
+      name: "",
+      backlink: false,
+      contact: "",
+      nameMentioned: false,
+    };
 
     try {
 
-      await page.goto(profileUrl, {
+      const response = await page.goto(profileUrl, {
         waitUntil: "domcontentloaded",
         timeout: 15000,
       });
 
-      const rawTitle = await page.evaluate(() =>
-        document
-          .querySelector('meta[property="og:title"]')
-          ?.getAttribute("content") ||
-        document.title ||
-        ""
-      );
+      const httpStatus = response?.status() ?? 0;
 
-      // Tar bort plattformsnamnet i slutet, t.ex. " | Facebook".
-      const name = rawTitle
+      // Ger sidan en chans att rita ut innehållet.
+      await page.waitForTimeout(1000);
+
+      const data = await page.evaluate(() => ({
+        title:
+          document
+            .querySelector('meta[property="og:title"]')
+            ?.getAttribute("content") ||
+          document.title ||
+          "",
+        description:
+          document
+            .querySelector('meta[property="og:description"]')
+            ?.getAttribute("content") ||
+          document
+            .querySelector('meta[name="description"]')
+            ?.getAttribute("content") ||
+          "",
+        text: (document.body?.innerText ?? "").slice(0, 8000),
+        hrefs: Array.from(document.querySelectorAll("a[href]")).map(
+          (a) => (a as HTMLAnchorElement).href
+        ),
+        finalUrl: location.href,
+      }));
+
+      const loginWall =
+        /\/(login|accounts\/login|signin|checkpoint)/i.test(
+          data.finalUrl
+        ) ||
+        /^(log ?in|logga in|sign ?in|facebook|instagram|linkedin)\b/i.test(
+          data.title.trim()
+        );
+
+      const name = data.title
         .replace(
-          /\s*[|\-–—]\s*(facebook|instagram|linkedin|youtube|tiktok)\b.*$/i,
+          /\s*[|\-–—•]\s*(facebook|instagram|linkedin|youtube|tiktok|x|twitter)\b.*$/i,
           ""
         )
         .trim();
 
-      // Inloggningssidor och felsidor räknas inte som profilnamn.
-      if (
-        !name ||
-        /log ?in|logga in|sign ?up|registrera|facebook|instagram|linkedin|youtube|tiktok|error|fel/i.test(
-          name
-        )
-      ) {
-        return "";
+      const combined = [data.title, data.description, data.text].join(
+        "\n"
+      );
+
+      const readable =
+        httpStatus >= 200 &&
+        httpStatus < 400 &&
+        !loginWall &&
+        (name.length > 0 || data.description.length > 0);
+
+      if (!readable) {
+        return { ...empty, httpStatus };
       }
 
-      return name;
+      // Profilen länkar tillbaka till webbplatsen. Sociala medier
+      // slussar ofta länkar via en omdirigering (u=… / q=…).
+      const backlink = data.hrefs.some((href) => {
+
+        try {
+
+          const parsed = new URL(href);
+
+          const candidates = [
+            parsed.hostname,
+            parsed.searchParams.get("u") ?? "",
+            parsed.searchParams.get("q") ?? "",
+            parsed.searchParams.get("url") ?? "",
+          ];
+
+          return candidates.some((candidate) =>
+            candidate.toLowerCase().includes(websiteDomain)
+          );
+
+        } catch {
+
+          return false;
+        }
+      }) || combined.toLowerCase().includes(websiteDomain);
+
+      // Samma telefonnummer eller e-post som på webbplatsen.
+      const digits = combined.replace(/\D/g, "");
+      const lowerCombined = combined.toLowerCase();
+
+      let contact = "";
+
+      if (sitePhoneKeys.some((key) => digits.includes(key))) {
+        contact = "telefonnummer";
+      } else if (siteEmails.some((mail) => lowerCombined.includes(mail))) {
+        contact = "e-postadress";
+      }
+
+      const normalizedCombined = normalizeName(combined);
+
+      const nameMentioned = companyNameCandidates.some(
+        (candidate) =>
+          candidate.length >= 6 &&
+          normalizedCombined.includes(candidate)
+      );
+
+      return {
+        readable: true,
+        httpStatus,
+        name,
+        backlink,
+        contact,
+        nameMentioned,
+      };
 
     } catch {
 
-      return "";
+      return empty;
     }
   };
 
@@ -544,6 +701,12 @@ export async function checkSocialMedia(
   ]);
 
   // Kontrollerar alla hittade sociala medier.
+  //
+  // En länk från företagets egen webbplats är i sig en stark
+  // indikation på att profilen tillhör företaget. Ett konto som
+  // inte går att koppla får därför aldrig status "fel", utan
+  // "kräver manuell verifiering". Bara en profil som bevisligen
+  // inte finns (HTTP 404/410) rapporteras som fel.
   for (const [
     platform,
     socialUrl,
@@ -555,11 +718,17 @@ export async function checkSocialMedia(
       const socialUrlObject =
         new URL(socialUrl);
 
+      // Delningsknappar och inbäddade flöden är inga profiler.
+      if (isShareOrWidgetUrl(socialUrl)) {
+
+        console.log(
+          `- ${platform}: ${socialUrl} (delningslänk, hoppas över)`
+        );
+
+        continue;
+      }
+
       // Hämtar alla delar av sökvägen som kan innehålla ett namn.
-      //
-      // Exempel Facebook:
-      //   /people/Henkes-Måleri-Ab/61557009826851/
-      //   -> "Henkes-Måleri-Ab" (siffer-ID:t hoppas över)
       const nameSegments =
         socialUrlObject.pathname
           .split("/")
@@ -578,9 +747,8 @@ export async function checkSocialMedia(
               !/^\d+$/.test(segment)
           );
 
-      // Matchar om något namn i URL:en liknar något
-      // av företagets namn eller domännamnet.
-      let matches = nameSegments.some((segment) => {
+      // Steg 1: namnet i adressen liknar företagets namn.
+      const urlMatches = nameSegments.some((segment) => {
 
         const normalizedSegment =
           normalizeName(segment);
@@ -592,93 +760,101 @@ export async function checkSocialMedia(
         );
       });
 
-      // Om URL:en inte innehåller något namn (bara ett ID)
-      // försöker vi läsa profilens namn från själva profilsidan.
-      let profileNameNotReadable = false;
+      if (urlMatches) {
 
-      if (!matches && nameSegments.length === 0) {
-
-        const profileName =
-          await readProfileName(socialUrl);
-
-        if (profileName) {
-
-          const normalizedProfileName =
-            normalizeName(profileName);
-
-          matches = companyNameCandidates.some(
-            (candidate) =>
-              namesMatch(normalizedProfileName, candidate) ||
-              namesFuzzyMatch(normalizedProfileName, candidate)
-          );
-
-        } else {
-
-          profileNameNotReadable = true;
-        }
-      }
-
-      if (!matches && profileNameNotReadable) {
-
-        unverified.push({
+        matched.push({
           platform,
           url: socialUrl,
-          message:
-            "Profilens namn står inte i URL:en och kunde inte läsas från sidan",
+          reason: "namnet i adressen liknar företagets namn",
         });
 
-        console.log(
-          `⚠ ${platform}: ${socialUrl}`
-        );
+        console.log(`✓ ${platform}: ${socialUrl}`);
+        console.log("  ✓ Kontot matchar företaget");
 
-        console.log(
-          "  Kunde inte verifieras automatiskt (kontrollera profilen manuellt)"
-        );
+        continue;
+      }
 
-      } else if (!matches) {
+      // Steg 2: öppna profilen och leta efter andra samband.
+      const evidence = await readProfile(socialUrl);
+
+      const reasons: string[] = [];
+
+      if (evidence.backlink) {
+        reasons.push("profilen länkar till webbplatsen");
+      }
+
+      if (evidence.contact) {
+        reasons.push(
+          `samma ${evidence.contact} som på webbplatsen`
+        );
+      }
+
+      if (evidence.nameMentioned) {
+        reasons.push("företagets namn nämns på profilen");
+      }
+
+      if (reasons.length > 0) {
+
+        matched.push({
+          platform,
+          url: socialUrl,
+          reason: reasons.join(", "),
+        });
+
+        console.log(`✓ ${platform}: ${socialUrl}`);
+        console.log(`  ✓ Kontot matchar företaget (${reasons.join(", ")})`);
+
+        continue;
+      }
+
+      // Profilen finns inte.
+      if (evidence.httpStatus === 404 || evidence.httpStatus === 410) {
 
         failed.push({
           platform,
           url: socialUrl,
           message:
-            `Kontot verkar inte matcha företaget ${displayCompanyName}`,
+            `Profilen finns inte (HTTP ${evidence.httpStatus})`,
         });
 
+        console.log(`✗ ${platform}: ${socialUrl}`);
         console.log(
-          `✗ ${platform}: ${socialUrl}`
+          `  Profilen finns inte (HTTP ${evidence.httpStatus})`
         );
 
-        console.log(
-          `  Kontot verkar inte tillhöra företaget ${displayCompanyName}`
-        );
-
-      } else {
-
-        matched.push({
-          platform,
-          url: socialUrl,
-        });
-
-        console.log(
-          `✓ ${platform}: ${socialUrl}`
-        );
-
-        console.log(
-          `  ✓ Kontot matchar företaget`
-        );
+        continue;
       }
+
+      // Kopplingen kan inte fastställas.
+      const message = evidence.readable
+        ? `Profilen${evidence.name ? ` "${evidence.name}"` : ""} ` +
+          `länkar inte till webbplatsen och företagets namn nämns ` +
+          "inte på den. Länken kommer från företagets egen webbplats, " +
+          "men kopplingen kunde inte bekräftas automatiskt."
+        : "Profilens innehåll kunde inte läsas automatiskt " +
+          "(inloggningsvägg eller blockering) och namnet i adressen " +
+          "skiljer sig från företagets namn.";
+
+      unverified.push({
+        platform,
+        url: socialUrl,
+        message,
+      });
+
+      console.log(`⚠ ${platform}: ${socialUrl}`);
+      console.log(`  Kräver manuell verifiering: ${message}`);
 
     } catch {
 
-      failed.push({
+      unverified.push({
         platform,
         url: socialUrl,
         message:
-          `Kunde inte kontrollera sociala mediet: ${socialUrl}`,
+          "Länken kunde inte tolkas eller kontrolleras automatiskt",
       });
 
       console.log(
-        `✗ ${platform}: kunde inte verifieras`
+        `⚠ ${platform}: kunde inte verifieras (kräver manuell kontroll)`
       );
     }
   }
@@ -696,21 +872,20 @@ export async function checkSocialMedia(
   );
 
   console.log(
-    `Sociala medier som inte matchar: ${failed.length}`
+    `Sociala medier som inte finns: ${failed.length}`
   );
 
   console.log(
-    `Sociala medier som inte kunde verifieras: ${unverified.length}`
+    `Sociala medier som kräver manuell verifiering: ${unverified.length}`
   );
 
   // Returnerar resultaten.
   //
-  // found = profiler som matchar företaget.
-  // failed = profiler som inte matchar eller inte kunde
-  // verifieras. En profil finns alltså aldrig i båda.
-  //
-  // unverified = profiler som inte gick att kontrollera
-  // automatiskt och som bör granskas manuellt.
+  // found = profiler som matchar företaget (med orsak).
+  // failed = profiler som bevisligen inte finns (HTTP 404/410).
+  // unverified = profiler där kopplingen till företaget inte kunde
+  // fastställas automatiskt. De kräver manuell verifiering och räknas
+  // inte som fel.
   return {
     found: matched,
 

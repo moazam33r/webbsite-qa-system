@@ -36,10 +36,6 @@ import { QACheckResult } from "./qa-report";
 
 const HIDE_DUPLICATE_AI_SECTIONS = true;
 const INCLUDE_TECHNICAL_APPENDIX = true;
-// Måltal för PageSpeed-score. Ska stämma med gränserna i
-// checks/performance.ts (DESKTOP_PASS_SCORE / MOBILE_PASS_SCORE).
-const DESKTOP_PERFORMANCE_TARGET = 90;
-const MOBILE_PERFORMANCE_TARGET = 90;
 
 // ============================================================
 // DATASTRUKTURER
@@ -159,7 +155,7 @@ function getOverallHeadline(
     if (status === "FAIL") return "Behöver åtgärdas";
     if (status === "WARNING") return "Kan förbättras";
 
-    return "Inga problem";
+    return "PASS";
 }
 
 function getReportDate(): string {
@@ -967,6 +963,49 @@ function buildPhoneFinding(result: QACheckResult): Finding[] {
     return findings;
 }
 
+function buildSocialFinding(result: QACheckResult): Finding[] {
+    const lines = (result.message ?? "").split(/\r?\n/);
+    const findings: Finding[] = [];
+
+    const urlsFor = (labelPattern: RegExp): string[] =>
+        uniqueUrls(
+            lines
+                .filter((line) => labelPattern.test(line))
+                .flatMap((line) => extractUrls(line))
+        );
+
+    const missing = urlsFor(/^Profil som inte finns:/i);
+    const manual = urlsFor(/^Profil som kräver manuell verifiering:/i);
+
+    if (missing.length > 0) {
+        findings.push({
+            priority: "Viktig",
+            category: result.name,
+            title: "Länk till social media-profil som inte finns",
+            description:
+                "Profilen svarade med att sidan saknas (404). Besökare som klickar på länken når ingen profil.",
+            pages: missing,
+            action:
+                "Rätta länken till företagets riktiga profil eller ta bort den.",
+        });
+    }
+
+    if (manual.length > 0) {
+        findings.push({
+            priority: "Liten",
+            category: result.name,
+            title: "Kräver manuell verifiering: sociala medier",
+            description:
+                "Länken kommer från företagets egen webbplats, men systemet kunde inte automatiskt bekräfta att profilen tillhör företaget (t.ex. för att plattformen kräver inloggning). Det är inget fel.",
+            pages: manual,
+            action:
+                "Öppna profilen och kontrollera att den är företagets officiella konto.",
+        });
+    }
+
+    return findings;
+}
+
 function buildMapsFinding(result: QACheckResult): Finding {
     const isGbp = /business/i.test(result.name);
     const message = cleanMessage(result.message);
@@ -1044,6 +1083,8 @@ for (const result of results) {
         derived = parseTextFindings(result);
     } else if (/telefonvalidering/i.test(result.name)) {
         derived = buildPhoneFinding(result);
+    } else if (/sociala medier/i.test(result.name)) {
+        derived = buildSocialFinding(result);
     } else if (/google maps|google business/i.test(result.name)) {
         derived = [buildMapsFinding(result)];
     } else if (
@@ -1745,188 +1786,6 @@ function addFindings(
     }
 }
 
-// ============================================================
-// PRESTANDA
-// ============================================================
-
-function addPerformanceBar(
-    document: PDFKit.PDFDocument,
-    y: number,
-    label: string,
-    score: number,
-    target: number
-): void {
-    const safeScore = Math.max(0, Math.min(100, score));
-    const trackX = PAGE.margin + 70;
-    const trackWidth = PAGE.contentWidth - 120;
-
-    document
-        .fillColor(COLORS.text)
-        .font("Helvetica")
-        .fontSize(9)
-        .text(label, PAGE.margin, y + 5, {
-            width: 66,
-            lineBreak: false,
-        });
-
-    document
-        .roundedRect(trackX, y, trackWidth, 20, 5)
-        .fill(COLORS.lowBackground);
-
-    document
-        .roundedRect(
-            trackX,
-            y,
-            Math.max(1, (trackWidth * safeScore) / 100),
-            20,
-            5
-        )
-        .fill(
-            safeScore >= target
-                ? COLORS.pass
-                : COLORS.warning
-        );
-
-    const targetX = trackX + (trackWidth * target) / 100;
-
-    document
-        .rect(targetX - 1, y - 4, 2, 28)
-        .fill(COLORS.dark);
-
-    document
-        .fillColor(COLORS.text)
-        .font("Helvetica-Bold")
-        .fontSize(10)
-        .text(String(safeScore), trackX + trackWidth + 8, y + 5, {
-            width: 36,
-            lineBreak: false,
-        });
-}
-
-function addPerformance(
-    document: PDFKit.PDFDocument,
-    results: QACheckResult[]
-): void {
-    const result = results.find((r) =>
-        /prestanda|performance/i.test(r.name)
-    );
-
-    if (!result) return;
-
-    const message = cleanMessage(result.message);
-
-    const desktopMatch = message.match(/Desktop:\s*(\d+)/i);
-    const mobileMatch = message.match(/(?:Mobile|Mobil):\s*(\d+)/i);
-
-    const desktop = desktopMatch ? Number(desktopMatch[1]) : undefined;
-    const mobile = mobileMatch ? Number(mobileMatch[1]) : undefined;
-
-    if (desktop === undefined && mobile === undefined) return;
-
-    ensureSpace(document, 140, "Prestanda");
-    addSectionTitle(document, "Prestanda");
-
-    const y = document.y + 6;
-
-    if (desktop !== undefined) {
-        addPerformanceBar(
-            document,
-            y,
-            "Desktop",
-            desktop,
-            DESKTOP_PERFORMANCE_TARGET
-        );
-    }
-
-    if (mobile !== undefined) {
-        addPerformanceBar(
-            document,
-            y + (desktop !== undefined ? 36 : 0),
-            "Mobil",
-            mobile,
-            MOBILE_PERFORMANCE_TARGET
-        );
-    }
-
-    document
-        .fillColor(COLORS.secondaryText)
-        .font("Helvetica")
-        .fontSize(8)
-        .text(
-            `Den svarta linjen markerar målet: desktop ${DESKTOP_PERFORMANCE_TARGET}/100, mobil ${MOBILE_PERFORMANCE_TARGET}/100.`,
-            PAGE.margin,
-            y + (desktop !== undefined && mobile !== undefined ? 76 : 40),
-            { width: PAGE.contentWidth }
-        );
-
-    document.y = y + (desktop !== undefined && mobile !== undefined ? 100 : 64);
-}
-
-// ============================================================
-// DET SOM FUNGERAR
-// ============================================================
-
-function addWhatWorks(
-    document: PDFKit.PDFDocument,
-    results: QACheckResult[]
-): void {
-    const passed = results.filter((r) => r.status === "PASS");
-
-    if (passed.length === 0) return;
-
-    ensureSpace(document, 90, "Det som fungerar");
-    addSectionTitle(document, "Det som fungerar");
-
-    const nameWidth = 110;
-    const messageX = PAGE.margin + 14 + nameWidth + 8;
-    const messageWidth = PAGE.contentWidth - 14 - nameWidth - 8;
-
-    for (const result of passed) {
-        const message =
-            /telefonvalidering/i.test(result.name) &&
-            /SAKNAR VALIDERING/i.test(result.message ?? "")
-                ? "Valfria telefonfält saknar validering (låg prioritet, se fynd)."
-                : shortenText(result.message, 260);
-
-        const rowHeight = Math.max(
-            16,
-            measure(document, message, messageWidth, "Helvetica", 8.5) + 6
-        );
-
-        ensureSpace(document, rowHeight, "Det som fungerar");
-
-        const y = document.y;
-        const isInfo = /^0\s/.test(message);
-
-        document
-            .circle(PAGE.margin + 4, y + 5, 3)
-            .fill(isInfo ? COLORS.secondaryText : COLORS.pass);
-
-        document
-            .fillColor(COLORS.text)
-            .font("Helvetica-Bold")
-            .fontSize(8.5)
-            .text(result.name, PAGE.margin + 14, y, {
-                width: nameWidth,
-            });
-
-        document
-            .fillColor(COLORS.muted)
-            .font("Helvetica")
-            .fontSize(8.5)
-            .text(isInfo ? `Information: ${message}` : message, messageX, y, {
-                width: messageWidth,
-                lineGap: 2,
-            });
-
-        document.y = y + rowHeight;
-    }
-
-    document.y += 6;
-    document.font("Helvetica");
-}
-
-
  // ============================================================
  // TEKNISK BILAGA
  // ============================================================
@@ -2293,8 +2152,8 @@ function addReportBody(
     addSummaryCard(document, results);
     addDoFirst(document, findings);
     addFindings(document, findings, totalPages);
-    addPerformance(document, results);
-    addWhatWorks(document, results);
+    // Prestandastaplarna och "Det som fungerar" visas inte längre i
+    // rapporten. Prestanda som ligger under målet syns som fynd.
 
     if (aiAnalysis?.trim()) {
         addAIAnalysis(document, aiAnalysis);

@@ -1933,8 +1933,7 @@ if (enabled("phone")) {
       url
     );
 
-  // Samla länkar från matchande, icke matchande och
-  // overifierade profiler.
+  // Samla länkar från matchande, saknade och overifierade profiler.
   const socialMediaLinks = [
     ...socialMediaResult.found.map((item) => ({
       url: item.url,
@@ -1942,11 +1941,11 @@ if (enabled("phone")) {
     })),
     ...socialMediaResult.failed.map((item) => ({
       url: item.url,
-      label: "Profil som inte matchar",
+      label: "Profil som inte finns",
     })),
     ...socialMediaResult.unverified.map((item) => ({
       url: item.url,
-      label: "Profil som inte kunde verifieras automatiskt",
+      label: "Profil som kräver manuell verifiering",
     })),
   ].filter((item) => item.url);
 
@@ -1960,14 +1959,27 @@ if (enabled("phone")) {
           : "PASS",
     message: [
       `${socialMediaResult.found.length} sociala medier matchar webbplatsen`,
-      `${socialMediaResult.failed.length} sociala medier matchar inte företaget`,
+      ...(socialMediaResult.failed.length > 0
+        ? [
+            `${socialMediaResult.failed.length} sociala medier finns inte (profilen gav 404)`,
+          ]
+        : []),
       ...(socialMediaResult.unverified.length > 0
         ? [
-            `${socialMediaResult.unverified.length} sociala medier kunde inte verifieras automatiskt`,
+            `${socialMediaResult.unverified.length} sociala medier kräver manuell verifiering`,
           ]
         : []),
       ...socialMediaLinks.map(
         (item) => `${item.label}: ${item.url}`
+      ),
+      ...socialMediaResult.found.map(
+        (item) => `Kopplingen för ${item.platform}: ${item.reason}`
+      ),
+      ...socialMediaResult.unverified.map(
+        (item) => `Kräver manuell verifiering – ${item.platform}: ${item.message}`
+      ),
+      ...socialMediaResult.failed.map(
+        (item) => `Profil som inte finns – ${item.platform}: ${item.message}`
       ),
     ].join("\n"),
   });

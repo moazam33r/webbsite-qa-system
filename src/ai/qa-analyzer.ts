@@ -147,6 +147,18 @@ ${allResults}
 }
 
 
+
+// Kortar ett resultat till sin sammanfattning (första stycket), så att
+// långa detaljlistor inte fyller reservanalysen.
+function summarizeMessage(message: string): string {
+  const first = (message ?? "")
+    .split(/\n\s*\n/)[0]
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return first.length > 220 ? first.substring(0, 217) + "..." : first;
+}
+
 // Skapar en svensk fallback om AI:n inte ger ett användbart svar.
 function createFallbackAnalysis(
   results: QACheckResult[],
@@ -174,7 +186,7 @@ function createFallbackAnalysis(
   const workingText = passed
     .map(
       (result) =>
-        `- ${result.name}: ${result.message}`
+        `- ${result.name}: ${summarizeMessage(result.message)}`
     )
     .join("\n");
 
@@ -185,7 +197,7 @@ function createFallbackAnalysis(
   ]
     .map(
       (result) =>
-        `- ${result.name}: ${result.message}`
+        `- ${result.name}: ${summarizeMessage(result.message)}`
     )
     .join("\n");
 
@@ -199,10 +211,16 @@ function createFallbackAnalysis(
     (result) => result.name.toLowerCase() === "prestanda"
   );
 
-  // Letar efter valideringsresultatet.
-  const validationResult = results.find(
-    (result) => result.name.toLowerCase() === "validering"
-  );
+  // Letar efter övriga resultat som kan ge rekommendationer.
+  const find = (pattern: RegExp) =>
+    results.find((result) => pattern.test(result.name));
+
+  const phoneResult = find(/telefonvalidering/i);
+  const emailResult = find(/e-postvalidering/i);
+  const ctaResult = find(/^cta$/i);
+  const navigationResult = find(/^navigation$/i);
+  const socialResult = find(/sociala medier/i);
+  const mapsResult = find(/google maps|google business/i);
 
   // Skapar rekommendationer.
   const recommendations: string[] = [];
@@ -220,14 +238,50 @@ function createFallbackAnalysis(
     );
   }
 
-  // Rekommendation för validering.
-  // Visas bara om valideringskontrollen hittade något.
+  // Rekommendation för telefonvalidering.
+  if (phoneResult && phoneResult.status !== "PASS") {
+    recommendations.push(
+      /SAKNAR VALIDERING/i.test(phoneResult.message) &&
+        !/UNDERKÄNDA KONTROLLER/i.test(phoneResult.message)
+        ? "- Överväg att lägga till validering av telefonnummer i de valfria telefonfälten (låg prioritet)."
+        : "- Förbättra valideringen av telefonnummer i de berörda formulären så att ogiltiga nummer stoppas innan formuläret skickas."
+    );
+  }
+
+  if (emailResult && emailResult.status !== "PASS") {
+    recommendations.push(
+      "- Förbättra valideringen av e-postadresser i de berörda formulären."
+    );
+  }
+
+  // Rekommendation för länkar och knappar som inte kunde verifieras.
+  const unverifiedChecks = [ctaResult, navigationResult]
+    .filter(
+      (result) =>
+        result &&
+        result.status !== "PASS" &&
+        /kunde inte verifieras/i.test(result.message)
+    )
+    .map((result) => result!.name);
+
+  if (unverifiedChecks.length > 0) {
+    recommendations.push(
+      `- Kontrollera manuellt de länkar som inte kunde verifieras automatiskt (${unverifiedChecks.join(", ")}).`
+    );
+  }
+
   if (
-    validationResult &&
-    validationResult.status !== "PASS"
+    socialResult &&
+    /kräver manuell verifiering/i.test(socialResult.message)
   ) {
     recommendations.push(
-      "- Förbättra valideringen av telefonnummer i de berörda formulären så att ogiltiga nummer stoppas innan formuläret skickas."
+      "- Kontrollera manuellt att länkade sociala medier-profiler är företagets officiella konton."
+    );
+  }
+
+  if (mapsResult && mapsResult.status !== "PASS") {
+    recommendations.push(
+      "- Överväg att lägga till Google Maps och länka till företagets Google-företagsprofil (rekommendation, inget fel)."
     );
   }
 
