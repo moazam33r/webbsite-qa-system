@@ -1,4 +1,4 @@
-# Website QA System
+# Webbsite QA System
 
 Ett automatiserat kvalitetssäkringssystem (QA) för webbplatser. Du anger en webbadress, och systemet crawlar sajten, kör upp till 20 kontroller (alla eller bara de du väljer), klassificerar varje resultat som **PASS**, **WARNING** eller **FAIL**, låter en lokal AI sammanfatta resultatet och skapar en färdig **PDF-rapport** där problemen är prioriterade.
 
@@ -77,8 +77,8 @@ PDF-rapport
 Har du redan Node.js, och vill bara komma igång? Kör detta i terminalen:
 
 ```bash
-git clone https://github.com/moazam33r/website-qa-system.git
-cd website-qa-system
+git clone https://github.com/moazam33r/webbsite-qa-system.git
+cd webbsite-qa-system
 npm install
 npx playwright install chromium
 ```
@@ -119,10 +119,10 @@ Välj ett av alternativen.
 
 **Alternativ A: Ladda ner som ZIP (enklast, kräver inget extra program)**
 
-1. Gå till **https://github.com/moazam33r/website-qa-system**.
+1. Gå till **https://github.com/moazam33r/webbsite-qa-system**.
 2. Klicka på den gröna knappen **Code** och välj **Download ZIP**.
 3. Packa upp ZIP-filen, till exempel på skrivbordet.
-4. Mappen heter `website-qa-system-main`. Du kan döpa om den till `website-qa-system`.
+4. Mappen heter `webbsite-qa-system-main`. Du kan döpa om den till `webbsite-qa-system`.
 
 **Alternativ B: Klona med Git (rekommenderas om du vill uppdatera enkelt)**
 
@@ -130,7 +130,7 @@ Välj ett av alternativen.
 2. Kör:
 
 ```bash
-git clone https://github.com/moazam33r/website-qa-system.git
+git clone https://github.com/moazam33r/webbsite-qa-system.git
 ```
 
 ### Steg 3: Öppna en terminal i projektmappen
@@ -320,15 +320,15 @@ För ett grafiskt gränssnitt, se [kapitel 11](#11-chrome-tillägget).
 
 ## 6. Var hamnar rapporten?
 
-PDF-rapporten sparas i **datorns temporära mapp**, i en undermapp som heter `website-qa-system`. Filen heter `QA-Report-<domän>.pdf`. Terminalen skriver alltid ut den exakta sökvägen när rapporten är klar, till exempel:
+PDF-rapporten sparas i **datorns temporära mapp**, i en undermapp som heter `webbsite-qa-system`. Filen heter `QA-Report-<domän>.pdf`. Terminalen skriver alltid ut den exakta sökvägen när rapporten är klar, till exempel:
 
 ```text
-C:\Users\dittnamn\AppData\Local\Temp\website-qa-system\QA-Report-exempel.se.pdf
+C:\Users\dittnamn\AppData\Local\Temp\webbsite-qa-system\QA-Report-exempel.se.pdf
 ```
 
 Öppna mappen:
 
-- **Windows (PowerShell):** `explorer $env:TEMP\website-qa-system`
+- **Windows (PowerShell):** `explorer $env:TEMP\webbsite-qa-system`
 - **macOS/Linux:** sökvägen skrivs ut i terminalen, kopiera den.
 
 Flytta eller kopiera rapporten till en annan plats om du vill spara den, eftersom temp-mappen kan rensas av systemet. Mappen `reports/` i projektet innehåller bara exempelrapporter.
@@ -587,11 +587,11 @@ Inga utskrifter betyder att allt är rätt.
 ## 13. Projektstruktur
 
 ```text
-website-qa-system/
+webbsite-qa-system/
 │
 ├── src/
 │   ├── cli.ts               # Startpunkt för terminalkörning (npm run qa)
-│   ├── website-scanner.ts   # Styr hela skanningen och samlar alla resultat
+│   ├── webbsite-scanner.ts   # Styr hela skanningen och samlar alla resultat
 │   ├── ai/                  # Ollama-integration, AI-analys och textgranskning
 │   ├── api/                 # Express-server (REST API)
 │   ├── checks/              # Alla QA-kontroller, en fil per kontroll
@@ -730,4 +730,4 @@ Kontrollera med `git status` att `.env` **inte** finns med bland filerna som ska
 
 **Författare:** Moaz Ameer  
 **Licens:** ISC  
-**GitHub:** https://github.com/moazam33r/website-qa-system
+**GitHub:** https://github.com/moazam33r/webbsite-qa-system
