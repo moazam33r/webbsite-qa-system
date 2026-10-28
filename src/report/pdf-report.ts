@@ -843,6 +843,178 @@ function buildGenericFinding(result: QACheckResult): Finding {
     };
 }
 
+
+// ============================================================
+// SPECIALFYND: TELEFON, MAPS/GBP, "KUNDE INTE AVGÖRAS"
+// ============================================================
+
+function firstParagraph(message: string): string {
+    const first = message
+        .split(/\n\s*\n/)[0]
+        .replace(/\s+/g, " ")
+        .trim();
+    return first;
+}
+
+function buildPhoneFinding(result: QACheckResult): Finding[] {
+    const message = result.message ?? "";
+
+    const blocks = message
+        .split(/\n\s*\n/)
+        .map((block) => block.trim())
+        .filter(Boolean);
+
+    const entries: {
+        page: string;
+        check: string;
+        required: boolean;
+        status: "failed" | "inconclusive";
+    }[] = [];
+
+    let mode: "failed" | "inconclusive" | "other" = "other";
+
+    for (const block of blocks) {
+        if (/^(UNDERKÄNDA KONTROLLER|SAKNAR VALIDERING)/i.test(block)) {
+            mode = "failed";
+            continue;
+        }
+        if (/^KUNDE INTE AVGÖRAS/i.test(block)) {
+            mode = "inconclusive";
+            continue;
+        }
+        if (/^GODKÄNDA KONTROLLER/i.test(block)) {
+            mode = "other";
+            continue;
+        }
+        if (mode === "other") continue;
+
+        const page = block.match(/Sida:\s*(\S+)/)?.[1];
+        if (!page) continue;
+
+        const checkText = block.match(/Kontroll:\s*(.+)/)?.[1]?.trim() ?? "";
+        const checks = mode === "failed"
+            ? checkText.split(/;\s*/).filter(Boolean)
+            : [checkText];
+
+        for (const check of checks) {
+            entries.push({
+                page,
+                check,
+                required: /Fältet är:\s*obligatoriskt/i.test(block),
+                status: mode,
+            });
+        }
+    }
+
+    if (entries.length === 0) {
+        return [buildGenericFinding(result)];
+    }
+
+    const unique = (items: string[]) => [...new Set(items)];
+    const findings: Finding[] = [];
+
+    const failed = entries.filter((e) => e.status === "failed");
+    const inconclusive = entries.filter((e) => e.status === "inconclusive");
+
+    if (failed.length > 0) {
+        const requiredFailed = failed.some((e) => e.required);
+        const all = failed.map((e) => e.check.toLowerCase());
+        const problems: string[] = [];
+
+        if (all.some((c) => /bokstäver/.test(c))) {
+            const where = [
+                all.some((c) => /skriver|inmatning/.test(c)) ? "vid inmatning" : "",
+                all.some((c) => /inskick/.test(c)) ? "vid inskick" : "",
+            ].filter(Boolean);
+            problems.push(
+                "bokstäver" + (where.length ? ` (${where.join(" och ")})` : "")
+            );
+        }
+
+        if (all.some((c) => /kort/.test(c))) problems.push("för kort nummer");
+
+        findings.push({
+            priority: requiredFailed ? "Viktig" : "Liten",
+            category: "Telefonvalidering",
+            title: requiredFailed
+                ? "Obligatoriskt telefonfält saknar validering"
+                : "Valfritt telefonfält saknar validering",
+            description:
+                `Fältet accepterar ogiltiga värden: ${problems.join(" och ") || "ogiltig inmatning"}. ` +
+                (requiredFailed
+                    ? "Besökare kan skicka in felaktiga telefonnummer."
+                    : "Fältet är valfritt, så besökaren kan lämna det tomt – därför låg prioritet."),
+            pages: unique(failed.map((e) => e.page)),
+            action: requiredFailed
+                ? "Lägg till validering av telefonnummer (endast siffror, rimlig längd) och ett tydligt felmeddelande."
+                : "Överväg att lägga till enkel validering av telefonnummer. Bekräfta med kunden om det behövs.",
+        });
+    }
+
+    if (inconclusive.length > 0) {
+        findings.push({
+            priority: "Liten",
+            category: "Telefonvalidering",
+            title: "Telefonfältet kunde inte bedömas automatiskt",
+            description:
+                "Formuläret gav inget tydligt svar på testet utan att något skickades. Kontrollera manuellt.",
+            pages: unique(inconclusive.map((e) => e.page)),
+            action:
+                "Kontrollera manuellt: skriv ett ogiltigt nummer (t.ex. bokstäver) i fältet och se om ett felmeddelande visas.",
+        });
+    }
+
+    return findings;
+}
+
+function buildMapsFinding(result: QACheckResult): Finding {
+    const isGbp = /business/i.test(result.name);
+    const message = cleanMessage(result.message);
+
+    if (result.status === "FAIL") {
+        return {
+            priority: "Viktig",
+            category: result.name,
+            title: shortenText(firstParagraph(result.message), 140),
+            pages: extractUrls(message),
+            action:
+                "Kontrollera att länken till Google-profilen är korrekt och leder till rätt företag.",
+        };
+    }
+
+    return {
+        priority: "Liten",
+        category: result.name,
+        title: isGbp
+            ? "Ingen Google Business Profile-länk hittades på webbplatsen"
+            : "Ingen inbäddad Google Maps-karta eller kartlänk hittades",
+        description: isGbp
+            ? "Detta är en rekommendation, inget fel. Profilen kan finnas ändå utan att vara länkad från webbplatsen."
+            : "Detta är en rekommendation, inget fel. Karta behövs bara om företaget har en adress som besökare ska hitta.",
+        pages: [],
+        scope: "Hela webbplatsen",
+        action: isGbp
+            ? "Kontrollera manuellt att företaget har en Google-företagsprofil och överväg att länka till den."
+            : "Överväg att lägga till en karta eller kartlänk på kontaktsidan om kunden har en fysisk adress.",
+    };
+}
+
+function buildUnverifiedFinding(result: QACheckResult): Finding {
+    const message = result.message ?? "";
+    const title = shortenText(firstParagraph(message), 150) || result.name;
+
+    return {
+        priority: "Liten",
+        category: result.name,
+        title,
+        description:
+            "Kunde inte verifieras automatiskt (ofta blockerad av webbplatsen mot robotar). Det betyder inte att något är trasigt.",
+        pages: extractUrls(message),
+        action:
+            "Kontrollera manuellt: öppna länkarna i en webbläsare och bekräfta att de fungerar.",
+    };
+}
+
 // ============================================================
 // SKAPA OCH PRIORITERA FYND
 // ============================================================
@@ -856,7 +1028,11 @@ for (const result of results) {
 
     // SEO kan innehålla mindre rekommendationer även vid PASS.
     // Övriga godkända kontroller ska fortsatt hoppas över.
-    if (result.status === "PASS" && !isSeoResult) continue;
+    const isOptionalPhoneNote =
+        /telefonvalidering/i.test(result.name) &&
+        /SAKNAR VALIDERING/i.test(result.message ?? "");
+
+    if (result.status === "PASS" && !isSeoResult && !isOptionalPhoneNote) continue;
 
     let derived: Finding[] = [];
 
@@ -866,6 +1042,17 @@ for (const result of results) {
         derived = parseLinkFindings(result);
     } else if (/text|stavning/i.test(result.name)) {
         derived = parseTextFindings(result);
+    } else if (/telefonvalidering/i.test(result.name)) {
+        derived = buildPhoneFinding(result);
+    } else if (/google maps|google business/i.test(result.name)) {
+        derived = [buildMapsFinding(result)];
+    } else if (
+        /^(cta|navigation)$/i.test(result.name) &&
+        result.status === "WARNING" &&
+        /kunde inte verifieras/i.test(result.message ?? "") &&
+        !/\b[1-9]\d* (?:misslyckade|trasiga|fel)\b/i.test(result.message ?? "")
+    ) {
+        derived = [buildUnverifiedFinding(result)];
     }
 if (isSeoResult && result.status === "PASS" && derived.length === 0) {
     continue;
@@ -890,11 +1077,13 @@ if (isSeoResult && result.status === "PASS" && derived.length === 0) {
     }
 
     for (const finding of findings) {
-        finding.action = getAction(
-            finding.category,
-            finding.title,
-            finding.description
-        );
+        finding.action =
+            finding.action ??
+            getAction(
+                finding.category,
+                finding.title,
+                finding.description
+            );
 
         if (
             finding.pages.length === 0 &&
@@ -1263,7 +1452,9 @@ function addDoFirst(
     document: PDFKit.PDFDocument,
     findings: Finding[]
 ): void {
-    const top = findings.slice(0, 3);
+    const top = findings
+        .filter((finding) => finding.priority !== "Liten")
+        .slice(0, 3);
 
     if (top.length === 0) return;
 
@@ -1469,9 +1660,9 @@ function addFindingCard(
     document
         .fillColor(COLORS.secondaryText)
         .font("Helvetica-Bold")
-        .fontSize(7)
+        .fontSize(6)
         .text(finding.category.toUpperCase(), cardX + 14, startY + 38, {
-            width: 72,
+            width: 74,
         });
 
     let y = startY + 14;
@@ -1691,7 +1882,11 @@ function addWhatWorks(
     const messageWidth = PAGE.contentWidth - 14 - nameWidth - 8;
 
     for (const result of passed) {
-        const message = shortenText(result.message, 160);
+        const message =
+            /telefonvalidering/i.test(result.name) &&
+            /SAKNAR VALIDERING/i.test(result.message ?? "")
+                ? "Valfria telefonfält saknar validering (låg prioritet, se fynd)."
+                : shortenText(result.message, 260);
 
         const rowHeight = Math.max(
             16,
@@ -1762,10 +1957,20 @@ function addWhatWorks(
          .map((line) => line.trim())
          .filter(Boolean);
 
-     const message = shortenText(
-         messageLines.map((line) => cleanMessage(line)).join(" "),
-         2000
-     );
+     // Behåll radbrytningarna i bilagan så att långa resultat
+     // (t.ex. telefonvalidering) går att läsa. Långa "Resultat:"-rader kortas.
+     let message = messageLines
+         .map((line) => {
+             const cleaned = cleanMessage(line);
+             return /^Resultat:/i.test(cleaned)
+                 ? shortenText(cleaned, 150)
+                 : cleaned;
+         })
+         .join("\n");
+
+     if (message.length > 2800) {
+         message = message.substring(0, 2797) + "...";
+     }
 
      const messageHeight = message
          ? measure(

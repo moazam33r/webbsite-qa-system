@@ -1751,16 +1751,29 @@ async function submitAndJudge(
       return { verdict: "rejected", detail: rejection };
     }
 
-    // Formuläret skickade en förfrågan som testet blockerade. Om servern
-    // hade godkänt eller avvisat numret går inte att se utan att skicka
-    // ett riktigt ärende, så det kan inte bedömas.
+    // Formuläret försökte skicka numret. Inget fel visades i fältet och
+    // ingenting stoppade inskicket i webbläsaren, så klientvalideringen
+    // saknas. Servern kan ändå avvisa numret, men det syns inte för
+    // besökaren förrän svaret kommer och kan inte kontrolleras utan att
+    // skicka ett riktigt ärende.
+    if (attempts.some((a) => a.strong)) {
+      return {
+        verdict: "accepted",
+        detail:
+          "formuläret skickade numret vidare till servern utan att " +
+          "visa något fel i fältet (förfrågan blockerades av testet, " +
+          "inget skickades; servern kan ändå avvisa numret)",
+      };
+    }
+
+    // En annan förfrågan blockerades. Det går inte att veta om den
+    // innehöll numret.
     if (attempts.length > 0) {
       return {
         verdict: "unknown",
         detail:
-          "formuläret validerar troligen på servern och kunde inte " +
-          "testas utan att skicka ett riktigt ärende (förfrågan " +
-          "blockerades av testet, inget skickades)",
+          "formuläret skickade en förfrågan som inte kunde kopplas till " +
+          "numret (blockerades av testet, inget skickades)",
       };
     }
 
@@ -1963,20 +1976,21 @@ async function isRequiredField(field: Locator): Promise<boolean> {
 
       if (!box) return false;
 
-      if (
-        box.matches(
-          ".ff-el-is-required, .is-required, .gfield_contains_required, " +
-            ".wpforms-field-required, .elementor-field-required, .required"
-        ) ||
-        box.querySelector(
-          ".ff-el-is-required, .asterisk-right, .asterisk-left, " +
-            ".gfield_required, .wpforms-required-label, .required"
-        )
-      ) {
-        return true;
+      // Ett fält som uttryckligen är märkt som valfritt är inte
+      // obligatoriskt, oavsett klasser.
+      const labelText = (box.textContent ?? "").slice(0, 300);
+
+      if (/\b(valfri\w*|optional)\b/i.test(labelText)) {
+        return false;
       }
 
-      return false;
+      // Bara markeringar på själva fältgruppen räknas. Klasser som
+      // "asterisk-right" sitter på alla etiketter, även valfria, och
+      // säger inget om huruvida fältet är obligatoriskt.
+      return box.matches(
+        ".ff-el-is-required, .is-required, .gfield_contains_required, " +
+          ".wpforms-field-required, .elementor-field-required"
+      );
     })
     .catch(() => false);
 }

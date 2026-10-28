@@ -73,7 +73,7 @@ Sammanfatta helhetsresultatet med antal PASS, WARNING och FAIL.
 4. Rekommendationer
 
 Ge konkreta rekommendationer baserat på problemen.
-Ge även en rekommendation för prestanda om mobil eller desktop har ett lägre resultat än 100/100.
+Ge även en rekommendation för prestanda om mobil eller desktop har ett lägre resultat än 90/100 (målet är 90 eller högre; ställ inga krav på 100).
 
 PASS:
 ${passed.join("\n")}
@@ -234,7 +234,7 @@ function createFallbackAnalysis(
   // Rekommendation för prestanda.
   if (performanceResult) {
     recommendations.push(
-      "- Kontrollera mobilprestandan och optimera sidan ytterligare om mobilresultatet ligger under 100/100."
+      "- Kontrollera mobilprestandan och optimera sidan om mobilresultatet ligger under målet 90/100."
     );
   }
 

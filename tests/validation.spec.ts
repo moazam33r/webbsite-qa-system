@@ -472,13 +472,15 @@ test("inskick: formuläret accepterar bokstäver och inget når servern", async 
   expect(writesReachingServer).toBe(0);
 });
 
-test("inskick via fetch: servervalidering kan inte bedömas", async ({ page }) => {
+test("inskick via fetch: numret skickas vidare utan fel i fältet", async ({ page }) => {
 
   const result = await runOn(page, "submitFetch");
 
   const submit = testOf(result, "submit");
 
-  expect(submit?.status).toBe("inconclusive");
+  // Numret skickades vidare utan att något fel visades i fältet.
+  expect(submit?.status).toBe("failed");
+  expect(submit?.submission).toBe("accepted");
   expect(submit?.detail).toContain("blockerades av testet");
 
   // Beviset: ingen skrivande förfrågan nådde "servern".

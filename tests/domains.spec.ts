@@ -56,3 +56,32 @@ test("Alternativa domäner kontroll", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+// En testadress hos webbhotell har inga egna domänvarianter, så en
+// saknad www-adress ska inte bli en varning.
+test("Testadress hos webbhotell hoppas över", async () => {
+
+  const originalFetch = globalThis.fetch;
+
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls++;
+    throw new Error("ska inte anropas");
+  };
+
+  try {
+
+    const result = await checkDomains(
+      "https://kund-hantverk.sg-host.com/"
+    );
+
+    expect(result.skipped).toBe(true);
+    expect(result.status).toBe("PASS");
+    expect(result.failed).toBe(0);
+    expect(calls).toBe(0);
+
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

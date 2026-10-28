@@ -531,6 +531,17 @@ const failedDomainDetails =
     .join("\n\n");
 
 
+if (domainsResult.skipped) {
+
+  results.push({
+    name: "Alternativa domäner",
+    status: "PASS",
+    message:
+      "Hoppades över: adressen är en testadress hos webbhotell och " +
+      "har inga egna domänvarianter att kontrollera.",
+  });
+
+} else
 results.push({
   name: "Alternativa domäner",
   status: domainsResult.status,
@@ -1634,13 +1645,39 @@ if (enabled("phone")) {
   const inconclusive = tests.filter((t) => t.status === "inconclusive");
   const passed = tests.filter((t) => t.status === "passed");
 
-  const describe = (t: (typeof tests)[number]) =>
-    `- Sida: ${t.pageUrl}\n` +
-    `  Fält: ${t.fieldName}\n` +
-    `  Kontroll: ${PHONE_TEST_LABELS[t.test]}\n` +
-    `  Testvärde: ${t.testValue}\n` +
-    `  Fältet är: ${t.required ? "obligatoriskt" : "valfritt"}\n` +
-    `  Resultat: ${t.detail}`;
+  // Kort och läsbar beskrivning av en underkänd kontroll.
+  const failedPhrase = (t: (typeof tests)[number]) =>
+    t.test === "typing"
+      ? `Bokstäver accepteras när man skriver (${t.testValue})`
+      : t.test === "short"
+        ? `För kort nummer accepteras (${t.testValue})`
+        : `Bokstäver accepteras vid inskick (${t.testValue})`;
+
+  const shortDetail = (text: string) =>
+    text.length > 160 ? text.substring(0, 157) + "..." : text;
+
+  // Grupperar per sida och fält så att varje fält beskrivs en gång.
+  const describeGroups = (
+    items: typeof tests,
+    phrase: (t: (typeof tests)[number]) => string
+  ) => {
+    const groups = new Map<string, typeof tests>();
+
+    for (const t of items) {
+      const key = `${t.pageUrl}|${t.fieldName}`;
+      groups.set(key, [...(groups.get(key) ?? []), t]);
+    }
+
+    return [...groups.values()]
+      .map(
+        (group) =>
+          `- Sida: ${group[0].pageUrl}\n` +
+          `  Fält: ${group[0].fieldName}\n` +
+          `  Fältet är: ${group[0].required ? "obligatoriskt" : "valfritt"}\n` +
+          `  Kontroll: ${group.map(phrase).join("; ")}`
+      )
+      .join("\n\n");
+  };
 
   if (tests.length === 0) {
     results.push({
@@ -1660,14 +1697,18 @@ if (enabled("phone")) {
           ? "UNDERKÄNDA KONTROLLER"
           : "SAKNAR VALIDERING (VALFRITT FÄLT – LÅG PRIORITET)") +
           "\n\n" +
-          failed.map(describe).join("\n\n")
+          describeGroups(failed, failedPhrase) +
+          "\n\nTestet skickar inget formulär. Servern kan ändå avvisa numret."
       );
     }
 
     if (inconclusive.length > 0) {
       sections.push(
         "KUNDE INTE AVGÖRAS – KONTROLLERA MANUELLT\n\n" +
-          inconclusive.map(describe).join("\n\n")
+          describeGroups(
+            inconclusive,
+            (t) => `${PHONE_TEST_LABELS[t.test]} – ${shortDetail(t.detail)}`
+          )
       );
     }
 
@@ -1685,11 +1726,11 @@ if (enabled("phone")) {
 
     results.push({
       name: "Telefonvalidering",
-      // Underkänt eller oavgjort ska aldrig se ut som godkänt.
-      // Underkända kontroller på enbart valfria fält är ett mindre
-      // problem: besökaren kan lämna fältet tomt.
+      // Underkänt eller oavgjort ska aldrig se ut som godkänt, även om
+      // fältet är valfritt. Prioriteten (låg för valfria fält) sätts
+      // i rapporten, inte här.
       status:
-        failed.some((t) => t.required) || inconclusive.length > 0
+        failed.length > 0 || inconclusive.length > 0
           ? "WARNING"
           : "PASS",
       message: sections.join("\n\n"),
@@ -1721,7 +1762,58 @@ if (enabled("phone")) {
     pages
   );
 
-  if (navigationResult.failed === 0) {
+  const navigationLines = (
+    items: {
+      url: string;
+      reason: string;
+      pages: string[];
+    }[]
+  ) =>
+    items
+      .map(
+        (item) =>
+          `- Länk: ${item.url}\n` +
+          `  Orsak: ${item.reason}\n` +
+          `  Finns på: ${item.pages.slice(0, 3).join(", ")}` +
+          (item.pages.length > 3
+            ? ` och ${item.pages.length - 3} sidor till`
+            : "")
+      )
+      .join("\n\n");
+
+  if (navigationResult.failed > 0) {
+
+    results.push({
+      name: "Navigation",
+      status: "FAIL",
+      message:
+        `${navigationResult.failed} interna navigationer är bekräftat trasiga. ` +
+        `${navigationResult.passed} fungerar` +
+        (navigationResult.unverified > 0
+          ? `, ${navigationResult.unverified} kunde inte verifieras automatiskt.`
+          : ".") +
+        "\n\nTRASIGA\n\n" +
+        navigationLines(navigationResult.failures) +
+        (navigationResult.unverified > 0
+          ? "\n\nKUNDE INTE VERIFIERAS – KONTROLLERA MANUELLT\n\n" +
+            navigationLines(navigationResult.unverifiedLinks)
+          : ""),
+    });
+
+  } else if (navigationResult.unverified > 0) {
+
+    results.push({
+      name: "Navigation",
+      status: "WARNING",
+      message:
+        `${navigationResult.passed} interna navigationer fungerar. ` +
+        `${navigationResult.unverified} kunde inte verifieras automatiskt ` +
+        "och bör kontrolleras manuellt. Inga bekräftat trasiga länkar.\n\n" +
+        "KUNDE INTE VERIFIERAS – KONTROLLERA MANUELLT\n\n" +
+        navigationLines(navigationResult.unverifiedLinks),
+    });
+
+  } else {
 
     results.push({
       name: "Navigation",
@@ -1729,17 +1821,7 @@ if (enabled("phone")) {
       message:
         `${navigationResult.passed} interna navigationer fungerar`,
     });
-
-  } else {
-
-    results.push({
-      name: "Navigation",
-      status: "FAIL",
-      message:
-        `${navigationResult.failed} interna navigationer fungerar inte`,
-    });
   }
-
 
   }
 

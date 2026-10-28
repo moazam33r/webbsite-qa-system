@@ -1,4 +1,3 @@
-
 import { URLSearchParams } from "node:url";
 
 // Automatisk kontroll av stavning och grammatik
@@ -74,6 +73,69 @@ function isTechnicalTerm(value: string): boolean {
 
   // Identifierare som blandar bokstäver och siffror.
   if (/\p{L}/u.test(word) && /\d/u.test(word)) {
+    return true;
+  }
+
+  return false;
+}
+
+// Gatuuppgifter som slutar så här är namn, inte stavfel.
+const STREET_SUFFIX =
+  /(gränd|gatan|gata|vägen|väg|torget|torg|allén|allé|stigen|stig|backen|gården|gård|plan|platsen|lunden|lund|ängen|ängsvägen|byväg|esplanaden|kajen|kaj|bron|holmen|hamnen)$/i;
+
+// Avgör om en träff är brus som inte ska rapporteras som textfel:
+// tekniska namn som står i löpande text, gatunamn före husnummer,
+// upprepning som bara skiljer i versaler (rubrik + brödtext) och
+// "börjar inte med stor bokstav" på fragment som saknar föregående text.
+function isNoiseMatch(
+  match: LanguageToolMatch,
+  matchedText: string
+): boolean {
+
+  const context = match.context?.text ?? "";
+  const offset = match.context?.offset ?? 0;
+  const length = match.context?.length ?? matchedText.length;
+
+  const before = offset > 0 ? context[offset - 1] : "";
+  const after = context[offset + length] ?? "";
+  const rest = context.substring(offset + length);
+
+  // Tekniska namn: wordpress_[hash], wp-settings-[id], session_id.
+  if (/[_\[\]]/.test(matchedText) || /^-|-$/.test(matchedText)) {
+    return true;
+  }
+
+  if (/[_\[\]]/.test(before) || /[_\[\]]/.test(after)) {
+    return true;
+  }
+
+  // Gatunamn följt av husnummer: "Tillufsgränd 1A, 271 46 Ystad".
+  if (
+    /^\p{Lu}/u.test(matchedText) &&
+    STREET_SUFFIX.test(matchedText) &&
+    /^\s+\d+\s?[A-Za-z]?\b/.test(rest)
+  ) {
+    return true;
+  }
+
+  // "PLATTSÄTTNING Plattsättning": rubrik och brödtext som upprepar
+  // samma ord med olika versaler är inte en dubblering av misstag.
+  const words = matchedText.trim().split(/\s+/);
+
+  if (
+    words.length === 2 &&
+    words[0].toLocaleLowerCase("sv") === words[1].toLocaleLowerCase("sv") &&
+    words[0] !== words[1]
+  ) {
+    return true;
+  }
+
+  // Fragment som börjar texten (rubrik, listpunkt) saknar föregående
+  // mening, så "stor bokstav" går inte att bedöma.
+  if (
+    /UPPERCASE_SENTENCE_START/i.test(match.rule?.id ?? "") &&
+    offset === 0
+  ) {
     return true;
   }
 
@@ -371,6 +433,11 @@ export async function checkText(
 
       // Filtrerar korta förkortningar med enbart versaler.
       if (/^[A-ZÅÄÖ]{2,6}$/.test(matchedText)) {
+        continue;
+      }
+
+      // Filtrerar brus: tekniska namn, gatunamn och liknande.
+      if (isNoiseMatch(match, matchedText)) {
         continue;
       }
 

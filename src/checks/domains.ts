@@ -1,3 +1,33 @@
+// Testadresser hos webbhotell och hostingtjänster. Där finns inga egna
+// domänvarianter (www, http) att kontrollera, så en saknad www-adress
+// är inte ett fel hos kunden.
+const HOSTING_TEST_DOMAINS = [
+  "sg-host.com",
+  "wpengine.com",
+  "wpenginepowered.com",
+  "kinsta.cloud",
+  "netlify.app",
+  "vercel.app",
+  "pages.dev",
+  "github.io",
+  "herokuapp.com",
+  "azurewebsites.net",
+  "localhost",
+];
+
+export function isHostingTestDomain(hostname: string): boolean {
+
+  const host = hostname.toLowerCase();
+
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.endsWith(".local")) {
+    return true;
+  }
+
+  return HOSTING_TEST_DOMAINS.some(
+    (domain) => host === domain || host.endsWith(`.${domain}`)
+  );
+}
+
 // Kontrollerar alternativa versioner av webbplatsens domän
 export async function checkDomains(
   url: string
@@ -15,6 +45,23 @@ export async function checkDomains(
         /^www\./,
         ""
       );
+
+    // En testadress hos webbhotellet har inga egna domänvarianter.
+    if (isHostingTestDomain(parsedUrl.hostname)) {
+
+      console.log(
+        `- ${parsedUrl.hostname} är en testadress hos webbhotell. ` +
+          "Domänvarianter kontrolleras inte."
+      );
+
+      return {
+        results: [],
+        passed: 0,
+        failed: 0,
+        skipped: true,
+        status: "PASS" as const,
+      };
+    }
 
     // Skapar möjliga versioner av domänen
     const domainVariants = [
@@ -47,6 +94,7 @@ export async function checkDomains(
           {
             method: "HEAD",
             redirect: "follow",
+            signal: AbortSignal.timeout(15000),
           }
         );
 
@@ -131,6 +179,7 @@ export async function checkDomains(
       results,
       passed,
       failed,
+      skipped: false,
       status:
         failed === 0
           ? "PASS" as const
@@ -148,6 +197,7 @@ export async function checkDomains(
       results: [],
       passed: 0,
       failed: 0,
+      skipped: false,
       status: "WARNING" as const,
     };
   }

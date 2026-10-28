@@ -1,4 +1,3 @@
-
 import { test, expect } from "@playwright/test";
 import { checkText } from "../src/checks/text-check";
 
@@ -398,4 +397,79 @@ test.describe("Svenska fackord och sammansatta ord", () => {
       );
     });
   }
+});
+
+// Brus som inte ska rapporteras som textfel
+
+async function issuesFor(
+  text: string,
+  matchedText: string,
+  ruleId = "SPELLING",
+  message = "Möjligt stavfel"
+) {
+  const originalFetch = globalThis.fetch;
+
+  const match = createMatch({ text, matchedText, message });
+  match.rule.id = ruleId;
+
+  mockLanguageTool([match]);
+
+  try {
+    return (await checkText(text, "sv", "https://example.com/")).issues;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("Gatunamn före husnummer rapporteras inte", async () => {
+  const text = "Adress: Tillufsgränd 1A, 271 46 Ystad.";
+  expect(await issuesFor(text, "Tillufsgränd")).toHaveLength(0);
+});
+
+test("Ett ord med liknande ändelse men utan husnummer rapporteras fortfarande", async () => {
+  const text = "Vi besöker Tillufsgränd ofta.";
+  expect(await issuesFor(text, "Tillufsgränd")).toHaveLength(1);
+});
+
+test("Tekniska namn med understreck och hakparenteser rapporteras inte", async () => {
+  const text = "Cookies: wordpress_[hash] och wp-settings-[id] sparas.";
+  expect(await issuesFor(text, "wordpress")).toHaveLength(0);
+  expect(await issuesFor(text, "hash")).toHaveLength(0);
+  expect(await issuesFor(text, "wp-settings-")).toHaveLength(0);
+});
+
+test("Rubrik och text som upprepar ordet med olika versaler rapporteras inte", async () => {
+  const text = "PLATTSÄTTNING Plattsättning i Ystad.";
+  expect(
+    await issuesFor(
+      text,
+      "PLATTSÄTTNING Plattsättning",
+      "WORD_REPEAT_RULE",
+      "Möjligt korrekturfel: du upprepade ett ord"
+    )
+  ).toHaveLength(0);
+});
+
+test("Verklig upprepning av samma ord rapporteras fortfarande", async () => {
+  const text = "Vi gör gör jobbet.";
+  expect(
+    await issuesFor(
+      text,
+      "gör gör",
+      "WORD_REPEAT_RULE",
+      "Möjligt korrekturfel: du upprepade ett ord"
+    )
+  ).toHaveLength(1);
+});
+
+test("Fragment som börjar texten med liten bokstav rapporteras inte", async () => {
+  const text = "lämna ett klagomål Kontakta gärna oss.";
+  expect(
+    await issuesFor(
+      text,
+      "lämna",
+      "UPPERCASE_SENTENCE_START",
+      "Meningen börjar inte med stor bokstav"
+    )
+  ).toHaveLength(0);
 });
