@@ -1,6 +1,6 @@
 # Website QA System
 
-Ett automatiserat kvalitetssäkringssystem (QA) för webbplatser. Du anger en webbadress, och systemet crawlar sajten, kör över 20 kontroller, klassificerar varje resultat som **PASS**, **WARNING** eller **FAIL**, låter en lokal AI sammanfatta resultatet och skapar en färdig **PDF-rapport**.
+Ett automatiserat kvalitetssäkringssystem (QA) för webbplatser. Du anger en webbadress, och systemet crawlar sajten, kör upp till 20 kontroller (alla eller bara de du väljer), klassificerar varje resultat som **PASS**, **WARNING** eller **FAIL**, låter en lokal AI sammanfatta resultatet och skapar en färdig **PDF-rapport** där problemen är prioriterade.
 
 Systemet är byggt med **Playwright**, **TypeScript**, **Node.js** och lokal AI via **Ollama**. Det kan användas på tre sätt: från terminalen, via ett REST API eller via ett Chrome-tillägg.
 
@@ -37,13 +37,14 @@ Systemet automatiserar de kontroller som annars görs för hand när man granska
 - **SEO:** rubriker (H1), meta description, canonical, alt-texter på bilder med mera.
 - **Prestanda:** mäter hastighet på dator och mobil med Google PageSpeed Insights.
 - **Responsivitet:** testar sidorna i mobilvy.
-- **Länkar, bilder, navigation och CTA-knappar:** hittar trasiga länkar och bilder.
-- **Formulär:** hittar formulär och testar obligatoriska fält samt validering av e-post och telefonnummer.
+- **Länkar, bilder, navigation och CTA-knappar:** hittar trasiga länkar och bilder. Ett misstänkt fel dubbelkontrolleras innan det rapporteras som trasigt (se [kapitel 8](#8-alla-kontroller)).
+- **Formulär:** hittar formulär och testar obligatoriska fält samt validering av e-post och telefonnummer. Inga formulär skickas på riktigt.
 - **Text och stavning:** kontrollerar svensk text med LanguageTool och en AI som filtrerar bort falska träffar.
 - **Säkerhet och domäner:** HTTPS, alternativa domäner (med/utan `www`) och liknande domäner.
 - **GDPR:** letar efter cookie- och integritetspolicy.
 - **Externa profiler:** sociala medier, Google Maps och Google Business Profile.
-- **Rapport:** AI-sammanfattning och en strukturerad PDF med åtgärdsförslag.
+- **Testval:** i Chrome-tillägget kan du köra hela analysen eller bara de tester du väljer.
+- **Rapport:** AI-sammanfattning och en strukturerad PDF där varje fynd är prioriterat (Kritisk, Viktig eller Liten) och har ett åtgärdsförslag.
 
 De faktiska kontrollerna görs av systemets egen testlogik. AI:n är ett **komplement** som sammanfattar och tolkar resultaten, den är inte själva testet.
 
@@ -58,6 +59,9 @@ QA-kontroller (sidor, SEO, prestanda, länkar, formulär, text, ...)
     |
     v
 Klassificering: PASS / WARNING / FAIL
+    |
+    v
+Prioritering av fynd: Kritisk / Viktig / Liten
     |
     v
 Lokal AI-analys (Ollama)
@@ -338,16 +342,36 @@ Varje kontroll får en av tre statusar:
 | Status | Betydelse | Vad du ska göra |
 |---|---|---|
 | ✓ **PASS** | Kontrollen gick bra. | Inget. |
-| ⚠ **WARNING** | Något kan förbättras, men inget är trasigt. | Granska och bedöm. |
-| ✗ **FAIL** | Ett konkret fel hittades. | Utred och åtgärda. |
+| ⚠ **WARNING** | Något kan förbättras, eller kunde inte avgöras automatiskt. Inget är bekräftat trasigt. | Granska och bedöm. |
+| ✗ **FAIL** | Ett konkret, bekräftat fel hittades. | Utred och åtgärda. |
 
 Exempel:
 
 - **PASS:** alla länkar svarar med rätt statuskod.
-- **WARNING:** ett telefonfält godkänner ett ogiltigt nummer, eller Google Business Profile hittades inte.
-- **FAIL:** en bild är trasig eller en intern länk ger 404.
+- **WARNING:** ett telefonfält godkänner ett ogiltigt nummer, Google Business Profile hittades inte, eller en länk gick inte att verifiera automatiskt.
+- **FAIL:** en bild är trasig eller en intern länk bekräftat ger 404.
 
-Det totala resultatet blir **FAIL** om minst en kontroll är FAIL, annars **WARNING** om minst en är WARNING, annars **PASS**.
+Det totala resultatet blir **FAIL** om minst en kontroll är FAIL, annars **WARNING** om minst en är WARNING, annars **PASS**. I PDF-rapporten visas det som *Behöver åtgärdas*, *Kan förbättras* eller *PASS*.
+
+### Tre sorters resultat: fel, rekommendation och manuell kontroll
+
+Systemet skiljer på tre saker så att du vet vad som faktiskt är fel:
+
+- **Fel:** något som är bekräftat trasigt, till exempel en sida som svarar 404 två gånger i rad.
+- **Rekommendation:** något som kan förbättras men inte är ett fel, till exempel att Google Maps saknas eller att ett valfritt telefonfält saknar validering.
+- **Kräver manuell kontroll:** något som systemet inte kunde avgöra, till exempel en länk som blockerar automatiska förfrågningar eller en social profil som kräver inloggning. Det räknas aldrig som ett fel.
+
+### Prioritering i PDF-rapporten
+
+Varje fynd i rapporten får en prioritet:
+
+| Prioritet | Betyder |
+|---|---|
+| **Kritisk** | Bekräftat fel som påverkar besökare eller säkerhet. |
+| **Viktig** | Bör åtgärdas, till exempel låg mobilprestanda eller ett obligatoriskt fält utan validering. |
+| **Liten** | Rekommendationer och saker att kontrollera manuellt. |
+
+Avsnittet **Gör först** visar bara Kritiska och Viktiga fynd.
 
 ### Prestanda
 
@@ -377,17 +401,46 @@ Vissa webbhotell (till exempel SiteGround) svarar med statuskod **202** och en k
 | **Länkar** | Interna och externa länkar, telefonlänkar och om länkar leder till rätt typ av sida. |
 | **Bilder** | Att bilder laddas. |
 | **Formulär** | Hittar formulär och fält samt vilka som är obligatoriska. |
-| **Validering** | Testar att e-post- och telefonfält stoppar ogiltiga värden. |
-| **Navigation** | Att menyn och interna navigeringsvägar fungerar. |
-| **CTA** | Att knappar och länkar för handling (till exempel "Kontakta oss") fungerar. |
-| **Sociala medier** | Hittar Facebook, Instagram, LinkedIn med flera och kontrollerar att profilen verkar tillhöra företaget. |
+| **E-postvalidering** | Testar att e-postfält stoppar ogiltiga adresser. |
+| **Telefonvalidering** | Testar att telefonfält stoppar bokstäver och för korta nummer (se nedan). |
+| **Navigation** | Att menyn och interna navigeringsvägar fungerar. Misstänkta fel verifieras innan de rapporteras. |
+| **CTA** | Att knappar och länkar för handling (till exempel "Kontakta oss") fungerar. Misstänkta fel verifieras innan de rapporteras. |
+| **Sociala medier** | Hittar Facebook, Instagram, LinkedIn med flera och kontrollerar att profilen hör till företaget (se nedan). |
 | **Google Maps** | Letar efter Google Maps-karta eller länk. |
 | **Google Business Profile** | Letar efter företagets Google-profil. |
 | **AI-analys** | Sammanfattar allt, pekar ut viktigaste problemen och ger rekommendationer. |
 
+### Om telefonvalidering
+
+Testet skriver in värden i telefonfältet och bedömer det som en besökare skulle se. Tre kontroller görs:
+
+1. Skriv `070abc123` och se om bokstäverna accepteras.
+2. Skriv ett för kort nummer (`070123`) och se om något fel visas.
+3. Försök skicka formuläret med `070abc123`.
+
+**Inga formulär skickas på riktigt.** Alla förfrågningar som skulle skriva data (POST och liknande) blockeras av testet. Servern kan därför i teorin ändå avvisa numret, vilket rapporten påpekar. Systemet läser också av om fältet är **obligatoriskt eller valfritt**. Ett valfritt fält som saknar validering ger WARNING med låg prioritet (Liten), eftersom besökaren kan lämna fältet tomt. Ett obligatoriskt fält ger Viktig. Går det inte att avgöra resultatet visas det som "kunde inte avgöras, kontrollera manuellt".
+
+### Om länkar, navigation och CTA
+
+Systemet rapporterar inte en länk som trasig på första misstanke. Ett misstänkt fel (till exempel 404, 403 eller timeout) dubbelkontrolleras: 404/410 bekräftas med en andra förfrågan, vissa fel provas igen, och om webbplatsen blockerar automatiska förfrågningar kontrolleras länken i en riktig webbläsare. Resultatet blir:
+
+- **Fungerar**, **bekräftat trasig** (FAIL) eller **kunde inte verifieras** (WARNING, kontrollera manuellt).
+
+Farliga länkar (till exempel `/wp-admin`, utloggning eller borttagning) anropas aldrig.
+
 ### Om sociala medier
 
-Kontrollen jämför profilens namn med företagets namn. Företagsnamnet hämtas från sidans metadata, JSON-LD, sidfotens copyright-rad och domännamnet. Små stavningsskillnader tolereras. Om en Facebook-profil bara har ett ID i adressen försöker systemet läsa profilens namn från sidan. Går det inte visas profilen som **"kunde inte verifieras automatiskt"** (WARNING), och du bör kontrollera den manuellt.
+Kontrollen försöker först jämföra namnet i profilens adress med företagets namn (hämtat från sidans metadata, JSON-LD, sidfotens copyright-rad och domännamnet; små stavningsskillnader tolereras). Stämmer det inte öppnas profilen och systemet letar efter andra bevis:
+
+- profilen länkar tillbaka till webbplatsen,
+- samma telefonnummer eller e-postadress som på webbplatsen,
+- företagets namn nämns på profilen.
+
+Hittas inget av detta blir resultatet **"Kräver manuell verifiering"** (WARNING, prioritet Liten), eftersom länken ändå kommer från företagets egen webbplats. Bara en profil som bevisligen inte finns (HTTP 404/410) rapporteras som fel. Delningsknappar (till exempel `x.com/intent/tweet`) räknas inte som profiler.
+
+### Testadresser hos webbhotell
+
+För tillfälliga testadresser (till exempel `sg-host.com`, `netlify.app`, `vercel.app`, `localhost`) hoppas kontrollen av alternativa domäner över, eftersom de inte har egna domänvarianter. Det visas som PASS med förklaringen att kontrollen hoppades över.
 
 ---
 
@@ -407,14 +460,15 @@ const FAIL_SCORE = 50;
 const CORE_WEB_VITALS_CAN_OVERRIDE_SCORE = true;
 ```
 
-Diagrammet i PDF-rapporten har egna målvärden i `src/report/pdf-report.ts`:
+Prestanda som ligger under målet visas i PDF-rapporten som ett fynd (till exempel "Mobilprestanda 76/100"). Rapporten använder samma gränser som `performance.ts`.
+
+### Teknisk bilaga i PDF-rapporten
+
+Rapporten avslutas med en teknisk bilaga som visar originalresultaten från alla kontroller. Vill du ha en kortare rapport stänger du av den i `src/report/pdf-report.ts`:
 
 ```ts
-const DESKTOP_PERFORMANCE_TARGET = 90;
-const MOBILE_PERFORMANCE_TARGET = 90;
+const INCLUDE_TECHNICAL_APPENDIX = true; // sätt till false för att ta bort bilagan
 ```
-
-Ändrar du gränserna i `performance.ts` bör du ändra samma värden i `pdf-report.ts`, annars visar diagrammet fel mål.
 
 ### Felsökningsutskrift
 
@@ -448,6 +502,14 @@ Den körs på `http://localhost:3000`. Lämna terminalfönstret öppet så läng
 | `GET` | `/api/reports/:filename` | Hämtar en skapad PDF-rapport. |
 
 Webbadressen måste börja med `http://` eller `https://`.
+
+I anropet kan du dessutom skicka `tests`, en lista med id:n för de tester som ska köras. Utelämnas den körs hela analysen (sidor/crawling körs alltid). Tillgängliga id:n: `seo`, `performance`, `responsive`, `cookie`, `security`, `domains`, `similar`, `text`, `links`, `images`, `forms`, `email`, `phone`, `navigation`, `cta`, `social`, `maps`, `gbp`, `ai`.
+
+```json
+{ "url": "https://exempel.se/", "tests": ["seo", "cta", "social"] }
+```
+
+PDF-rapporten visar då vilka tester som valdes (till exempel "Valda tester (3 av 19)").
 
 **Exempel (PowerShell):**
 
@@ -489,6 +551,10 @@ npm run api
 5. Välj mappen `extension/` i projektet.
 6. Klicka på pussel-ikonen i Chrome och fäst **Website QA System** i verktygsfältet.
 7. Klicka på tillägget, skriv en webbadress (med `https://`) och starta skanningen.
+
+**Välja tester:** i kortet *Välj tester* kan du välja *Hela analysen* eller *Välj själv* och bocka i de tester du vill köra. Valet sparas till nästa gång. Sidor/crawling körs alltid eftersom övriga tester behöver veta vilka sidor som finns.
+
+När du ändrar filer i `extension/` ska du ladda om tillägget på `chrome://extensions/`.
 
 Tillägget pratar med `http://localhost:3000`, så API-servern måste köra medan du använder det.
 
@@ -601,7 +667,8 @@ npx playwright install chromium
 2. Kontrollera att modellen finns: `ollama list`. Saknas den, kör `ollama pull qwen3:4b`.
 3. Kontrollera att `OLLAMA_HOST` och `OLLAMA_MODEL` i `.env` stämmer.
 4. Får du timeout på en långsam dator, höj `OLLAMA_TIMEOUT_MS`, till exempel till `300000`.
-5. Står det att svaret kapades eller att genereringsgränsen nåddes är gränsen för hur långt AI-svaret får vara (`num_predict`) för låg. Den ställs in i `src/ai/ollama-worker.ts`.
+5. Om AI-analysen får timeout används en enklare färdig sammanfattning (en "reservanalys") i rapporten. Den tar med de viktigaste fynden och rekommendationerna men är inte lika utförlig.
+6. Står det att svaret kapades eller att genereringsgränsen nåddes är gränsen för hur långt AI-svaret får vara (`num_predict`) för låg. Den ställs in i `src/ai/ollama-worker.ts`.
 
 ### `PAGESPEED_API_KEY saknas i .env`
 
@@ -629,6 +696,10 @@ Ett annat program (eller en tidigare API-server) använder porten. Stäng det, e
 ### Startsidan svarar med 202 eller sajten blockerar skanningen
 
 Webbhotellet har ett bot-skydd. Lägg din IP-adress på godkänd-lista (allowlist) hos webbhotellet, eller stäng av skyddet tillfälligt under testet.
+
+### Ändringar syns inte i rapporten
+
+API-servern läser in koden när den startar. Efter att du bytt filer ska du stoppa servern med `Ctrl + C` och starta om den med `npm run api`.
 
 ### Rapporten hittas inte
 
