@@ -665,9 +665,9 @@ export interface PhoneTestResult {
 }
 
 export const PHONE_TEST_LABELS: Record<PhoneTestName, string> = {
-  typing: "Accepterar bokstäver vid inmatning",
-  short: "Accepterar för kort telefonnummer",
-  submit: "Accepterar bokstäver vid inskick",
+  typing: "Bokstäver vid inmatning",
+  short: "För kort telefonnummer",
+  submit: "Bokstäver vid inskick",
 };
 
 export const LETTER_TEST_VALUE = "070abc123";

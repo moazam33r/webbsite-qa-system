@@ -1110,10 +1110,27 @@ const main: HTMLElement | null =
     (issue) => issue.aiAssessment === "REVIEW"
   );
 
-  const sections: string[] = [
-    `Antal sannolika stavfel: ${reportSpellingIssues.length}`,
-    `Antal osäkra träffar: ${reportUncertainIssues.length}`,
-  ];
+  const incompletePages = new Set([
+    ...failedTextPages,
+    ...failedLanguageToolPages,
+  ]);
+
+  const sections: string[] = [];
+
+  if (incompletePages.size > 0) {
+    sections.push(
+      `Textkontrollen blev ofullständig: ${incompletePages.size} av ` +
+        `${totalTextPages} sidor kunde inte kontrolleras ` +
+        "(LanguageTool svarade inte eller sidans text kunde inte hämtas). " +
+        "Kör om textkontrollen senare."
+    );
+  }
+
+  sections.push(
+    `Antal sannolika stavfel: ${reportSpellingIssues.length}` +
+      (incompletePages.size > 0 ? " (på de sidor som kontrollerades)" : ""),
+    `Antal osäkra träffar: ${reportUncertainIssues.length}`
+  );
 
   if (reportSpellingIssues.length > 0) {
     sections.push(
@@ -1687,8 +1704,10 @@ if (enabled("phone")) {
     });
   } else {
     const sections: string[] = [
-      `${passed.length} godkända, ${failed.length} underkända, ` +
-        `${inconclusive.length} kunde inte avgöras`,
+      failed.length === 0 && inconclusive.length === 0
+        ? `Alla ${passed.length} kontroller godkända`
+        : `${passed.length} godkända, ${failed.length} underkända, ` +
+          `${inconclusive.length} kunde inte avgöras`,
     ];
 
     if (failed.length > 0) {
@@ -1712,17 +1731,8 @@ if (enabled("phone")) {
       );
     }
 
-    if (passed.length > 0) {
-      sections.push(
-        "GODKÄNDA KONTROLLER\n\n" +
-          passed
-            .map(
-              (t) =>
-                `- ${t.pageUrl} (${t.fieldName}): ${PHONE_TEST_LABELS[t.test]}`
-            )
-            .join("\n")
-      );
-    }
+    // Godkända kontroller listas inte i rapporten. Det är bara det som
+    // underkänns eller inte kan avgöras som behöver förklaras.
 
     results.push({
       name: "Telefonvalidering",
@@ -1958,7 +1968,12 @@ if (enabled("phone")) {
           ? "WARNING"
           : "PASS",
     message: [
-      `${socialMediaResult.found.length} sociala medier matchar webbplatsen`,
+      socialMediaResult.found.length +
+        socialMediaResult.failed.length +
+        socialMediaResult.unverified.length ===
+      0
+        ? "Inga sociala medier hittades på webbplatsen"
+        : `${socialMediaResult.found.length} sociala medier matchar webbplatsen`,
       ...(socialMediaResult.failed.length > 0
         ? [
             `${socialMediaResult.failed.length} sociala medier finns inte (profilen gav 404)`,
