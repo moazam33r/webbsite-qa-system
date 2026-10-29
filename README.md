@@ -251,6 +251,10 @@ OLLAMA_HOST=http://127.0.0.1:11434
 # Lokal modell som används av AI-analysen.
 OLLAMA_MODEL=qwen3:4b
 
+# Adress till LanguageTool (stavningskontrollen).
+# Lämna tom för att använda den publika tjänsten.
+LANGUAGETOOL_URL=
+
 # Maximal tid för ett Ollama-anrop i millisekunder (180000 = 3 minuter).
 OLLAMA_TIMEOUT_MS=180000
 
@@ -263,6 +267,7 @@ QA_DEBUG=false
 | `PAGESPEED_API_KEY` | Nyckel till Google PageSpeed Insights. Behövs för prestandakontrollen. | tom |
 | `OLLAMA_HOST` | Adress till Ollama. Ändra bara om Ollama körs på en annan dator eller port. | `http://127.0.0.1:11434` |
 | `OLLAMA_MODEL` | Vilken AI-modell som används. | `qwen3:4b` |
+| `LANGUAGETOOL_URL` | Adress till LanguageTool för stavningskontrollen. Tom = den publika tjänsten. Sätt till `http://localhost:8010/v2/check` om du kör en egen lokal server. | tom |
 | `OLLAMA_TIMEOUT_MS` | Hur länge systemet väntar på AI-svar. Höj värdet om du får timeout på en långsam dator. | `180000` |
 | `QA_DEBUG` | `true` visar en detaljerad tabell över textkontrollen i terminalen. | `false` |
 
@@ -320,15 +325,15 @@ För ett grafiskt gränssnitt, se [kapitel 11](#11-chrome-tillägget).
 
 ## 6. Var hamnar rapporten?
 
-PDF-rapporten sparas i **datorns temporära mapp**, i en undermapp som heter `webbsite-qa-system`. Filen heter `QA-Report-<domän>.pdf`. Terminalen skriver alltid ut den exakta sökvägen när rapporten är klar, till exempel:
+PDF-rapporten sparas i **datorns temporära mapp**, i en undermapp som heter `website-qa-system`. Filen heter `QA-Report-<domän>.pdf`. Terminalen skriver alltid ut den exakta sökvägen när rapporten är klar, till exempel:
 
 ```text
-C:\Users\dittnamn\AppData\Local\Temp\webbsite-qa-system\QA-Report-exempel.se.pdf
+C:\Users\dittnamn\AppData\Local\Temp\website-qa-system\QA-Report-exempel.se.pdf
 ```
 
 Öppna mappen:
 
-- **Windows (PowerShell):** `explorer $env:TEMP\webbsite-qa-system`
+- **Windows (PowerShell):** `explorer $env:TEMP\website-qa-system`
 - **macOS/Linux:** sökvägen skrivs ut i terminalen, kopiera den.
 
 Flytta eller kopiera rapporten till en annan plats om du vill spara den, eftersom temp-mappen kan rensas av systemet. Mappen `reports/` i projektet innehåller bara exempelrapporter.
@@ -591,7 +596,7 @@ webbsite-qa-system/
 │
 ├── src/
 │   ├── cli.ts               # Startpunkt för terminalkörning (npm run qa)
-│   ├── webbsite-scanner.ts   # Styr hela skanningen och samlar alla resultat
+│   ├── website-scanner.ts   # Styr hela skanningen och samlar alla resultat
 │   ├── ai/                  # Ollama-integration, AI-analys och textgranskning
 │   ├── api/                 # Express-server (REST API)
 │   ├── checks/              # Alla QA-kontroller, en fil per kontroll
@@ -630,7 +635,7 @@ webbsite-qa-system/
 - **AI-analysen körs lokalt** via Ollama. Ingen QA-data skickas till en extern AI-tjänst.
 - **Vissa kontroller använder externa tjänster:**
   - Prestanda: webbadressen skickas till **Google PageSpeed Insights**.
-  - Text/stavning: sidornas text skickas till den publika tjänsten **LanguageTool** (`api.languagetool.org`). Den kräver internetanslutning och har användningsgränser.
+  - Text/stavning: sidornas text skickas som standard till den publika tjänsten **LanguageTool** (`api.languagetool.org`). Den kräver internetanslutning och har användningsgränser. Med en egen lokal server (`LANGUAGETOOL_URL`) lämnar texten inte din dator.
   - Kontrollen av liknande domäner gör sökningar på internet.
 
 Det betyder att systemet inte är helt offline. Skanna inte sidor med känsligt eller privat innehåll om du inte vill att texten lämnar din dator.
@@ -678,9 +683,15 @@ Prestandakontrollen kan inte köras utan nyckel. Följ steg 7 i installationen o
 
 Googles API har användningsgränser. Vänta en stund och försök igen.
 
-### Text-/stavningskontrollen misslyckas
+### Text-/stavningskontrollen misslyckas (HTTP 503 eller 429)
 
-LanguageTool är en publik tjänst som kräver internet och har gränser per minut. Försök igen om en stund.
+LanguageTool är som standard en publik tjänst som kräver internet och har gränser per minut. Vid 503/429 försöker systemet automatiskt igen några gånger. Hjälper det inte blir textkontrollen markerad som ofullständig (WARNING, prioritet Liten) i stället för godkänd. Försök igen om en stund, eller kör en egen lokal LanguageTool-server:
+
+1. Starta LanguageTool lokalt, till exempel med Docker: `docker run -p 8010:8010 erikvl87/languagetool`.
+2. Sätt `LANGUAGETOOL_URL=http://localhost:8010/v2/check` i `.env`.
+3. Starta om programmet.
+
+Då skickas sidornas text inte längre till en extern tjänst.
 
 ### Port 3000 används redan (API)
 

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { scanWebsite } from "../src/website-scanner";
+import { scanWebsite } from "../src/webbsite-scanner";
 
 test("Website scanner", async ({ page }) => {
   test.setTimeout(300000);

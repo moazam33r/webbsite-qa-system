@@ -1,6 +1,6 @@
 import readline from "readline";
 import { chromium } from "@playwright/test";
-import { scanWebsite } from "./website-scanner";
+import { scanWebsite } from "./webbsite-scanner";
 import { importWebsitesFromCSV } from "./checks/csv-import";
 import { createPDFReport } from "./report/pdf-report";
 

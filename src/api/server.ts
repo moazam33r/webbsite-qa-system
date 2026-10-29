@@ -18,7 +18,7 @@ import path from "path";
 import os from "os";
 
 // Importerar själva QA-systemets scanner.
-import { scanWebsite } from "../website-scanner";
+import { scanWebsite } from "../webbsite-scanner";
 
 // Importerar funktionerna som skapar PDF-rapporter.
 import {

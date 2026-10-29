@@ -11,7 +11,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/moazam33r/website-qa-system.git"
+    "url": "git+https://github.com/moazam33r/webbsite-qa-system.git"
   },
   "keywords": [
     "qa",
@@ -23,9 +23,9 @@
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/moazam33r/website-qa-system/issues"
+    "url": "https://github.com/moazam33r/webbsite-qa-system/issues"
   },
-  "homepage": "https://github.com/moazam33r/website-qa-system#readme",
+  "homepage": "https://github.com/moazam33r/webbsite-qa-system#readme",
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/express": "^5.0.6",
